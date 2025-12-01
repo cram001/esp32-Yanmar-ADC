@@ -27,8 +27,10 @@
 //transforms
 #include "sensesp/transforms/linear.h"
 #include "sensesp/transforms/curveinterpolator.h"
+#include "sensesp/transforms/integrator.h"
 
-
+//engine hours
+// #include "engine_hours.h"
 
 
 using namespace reactesp;
@@ -242,13 +244,21 @@ const char* config_path_skpath = "/sensors/engine_rpm/sk";
 
 // ---------------------------------------------------------
 // 4. Sender resistance → temperature (°C)
+// note: ignore the trailing f, it stands for "float", needed in C++
+//{resistance (ohms), temperature (°C)}
 // ---------------------------------------------------------
 std::set<sensesp::CurveInterpolator::Sample> r_to_temp{
     { -1.0f,  0.0f },   // error state
     {1352.0f, 12.7f},
     {207.0f,  56.0f},
+    {131.0f,  63.9f},
+    {88.0f,   70.0f},
     {112.0f,  72.0f},
-    {90.0f,   85.0f},
+    {104.0f,  76.7f},
+    {97.0f,  80.0f},
+    {90.9f,  82.5f},
+    {85.5f,  85.0f},
+    {45.0f, 100.0f},
     {29.6f,  121.0f}
 };
 
@@ -271,10 +281,46 @@ auto* coolant_temp_sk_output =
       ->set_sort_order(1100);
   
 
-temp_c->connect_to(temp_c)
-        ->connect_to(coolant_temp_sk_output);
-        
 temp_c->connect_to(new SKOutputFloat("debug.coolant.temp", "/debug/coolant/temp"));
+
+  // fuel flow sender
+
+  // ---------------------------------------------------------
+// ENGINE FUEL FLOW (based on RPM → fuel curve)
+// ---------------------------------------------------------
+
+// RPM → fuel consumption curve (L/hr)
+std::set<sensesp::CurveInterpolator::Sample> rpm_to_fuel_lph{
+    {500.0f,  0.6f},
+    {850.0f,  0.7f},
+    {1500.0f, 1.8f},
+    {2000.0f, 2.3f},
+    {2800.0f, 2.7f},
+    {3000.0f, 3.0f},
+    {3400.0f, 4.5f},
+    {3800.0f, 6.0f},
+};
+
+// Convert L/hr → m³/hr (multiply by 0.001)
+auto* fuel_flow_lph =
+    frequency->connect_to(new sensesp::CurveInterpolator(&rpm_to_fuel_lph));
+
+auto* fuel_flow_m3ph =
+    fuel_flow_lph->connect_to(new sensesp::Linear(0.001f, 0.0f));
+
+// Output to Signal K
+auto* fuel_flow_sk_output = new SKOutputFloat(
+    "propulsion.mainEngine.fuel.rate",
+    "/fuel/rate/skPath"
+);
+
+ConfigItem(fuel_flow_sk_output)
+    ->set_title("Fuel Flow SK Path")
+    ->set_description("Signal K path for fuel rate")
+    ->set_sort_order(1200);
+
+fuel_flow_m3ph->connect_to(fuel_flow_sk_output);
+
 
 
 }
