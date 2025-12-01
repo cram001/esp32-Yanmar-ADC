@@ -268,11 +268,13 @@ auto* coolant_temp_sk_output =
   ConfigItem(coolant_temp_sk_output)
       ->set_title("Coolant Temperature Signal K Path")
       ->set_description("Signal K path for the coolant temperature")
-      ->set_sort_order(1000);
+      ->set_sort_order(1100);
   
 
 temp_c->connect_to(temp_c)
         ->connect_to(coolant_temp_sk_output);
+        
+temp_c->connect_to(new SKOutputFloat("debug.coolant.temp", "/debug/coolant/temp"));
 
 
 }
