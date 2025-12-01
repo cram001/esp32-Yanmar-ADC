@@ -32,6 +32,9 @@
 //engine hours
 #include "engine_hours.h"
 
+// DEBUG PANEL
+#include "debug_value.h"
+
 
 using namespace reactesp;
 using namespace sensesp;
@@ -344,6 +347,67 @@ auto* engine_hours_sk_output =
                       "/engine/hours/skPath");
 
 engine_hours->connect_to(engine_hours_sk_output);
+
+// ---------------------------------------------------------
+// DEBUG PANEL
+// ---------------------------------------------------------
+#include "debug_value.h"
+
+// Debug for ADC voltage
+auto* dbg_adc = new sensesp::DebugValue("ADC Voltage", "/debug/adc");
+ConfigItem(dbg_adc)
+    ->set_title("ADC Voltage")
+    ->set_description("Raw ADC reading after divider correction")
+    ->set_sort_order(2000);
+gauge_voltage->connect_to(dbg_adc);
+
+// Debug for sender resistance
+auto* dbg_res = new sensesp::DebugValue("Sender Resistance", "/debug/resistance");
+ConfigItem(dbg_res)
+    ->set_title("Sender Resistance")
+    ->set_description("Calculated resistance of coolant sender")
+    ->set_sort_order(2001);
+sender_res->connect_to(dbg_res);
+
+// Debug for coolant temperature
+auto* dbg_temp = new sensesp::DebugValue("Coolant Temp", "/debug/temp");
+ConfigItem(dbg_temp)
+    ->set_title("Coolant Temperature (debug)")
+    ->set_description("Temperature before mapping to Signal K")
+    ->set_sort_order(2002);
+temp_c->connect_to(dbg_temp);
+
+// Debug raw RPM
+auto* dbg_rpm = new sensesp::DebugValue("RPM", "/debug/rpm");
+ConfigItem(dbg_rpm)
+    ->set_title("RPM (debug)")
+    ->set_description("RPM as computed from frequency")
+    ->set_sort_order(2003);
+frequency->connect_to(dbg_rpm);
+
+// Debug fuel flow (L/hr)
+auto* dbg_fuel_lph = new sensesp::DebugValue("Fuel LPH", "/debug/fuel_lph");
+ConfigItem(dbg_fuel_lph)
+    ->set_title("Fuel Flow (L/hr)")
+    ->set_description("Interpolated fuel consumption")
+    ->set_sort_order(2004);
+fuel_flow_lph->connect_to(dbg_fuel_lph);
+
+// Debug fuel flow (m³/hr)
+auto* dbg_fuel_m3ph = new sensesp::DebugValue("Fuel m3/hr", "/debug/fuel_m3hr");
+ConfigItem(dbg_fuel_m3ph)
+    ->set_title("Fuel Flow (m³/hr)")
+    ->set_description("Converted fuel flow")
+    ->set_sort_order(2005);
+fuel_flow_m3ph->connect_to(dbg_fuel_m3ph);
+
+// Debug engine hours (raw value)
+auto* dbg_hrs = new sensesp::DebugValue("Engine Hours", "/debug/hours");
+ConfigItem(dbg_hrs)
+    ->set_title("Engine Hours (debug)")
+    ->set_description("Raw engine hour accumulation before rounding")
+    ->set_sort_order(2006);
+engine_hours->connect_to(dbg_hrs);
 
 
 }
