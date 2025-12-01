@@ -55,11 +55,11 @@ void setup() {
 
   /*
      Tell SensESP where the sensor is connected to the board
-     ESP32 pins are specified as just the X in GPIOX
+     ESP32 pins are specified as just the X in GPIOX (pin number on the board itself)
   */
-  uint8_t s1_pin = 4;
-  uint8_t s2_pin = 12;
-  uint8_t s3_pin = 16;
+  uint8_t s1_pin = 4;  //engine compartment
+  uint8_t s2_pin = 16;  //exhaust elbow
+  uint8_t s3_pin = 12;  //12v alternator
 
   // setup for engine RPM
   uint8_t rpm_pin = 25; // GPIO pin where the magnetic pickup is connected
@@ -81,7 +81,7 @@ void setup() {
   // To find valid Signal K Paths that fits your need you look at this link:
   // https://signalk.org/specification/1.4.0/doc/vesselsBranch.html
 
-  // Measure coolant temperature
+  // Measure engine compartment temperature
   auto compartment_temp =
       new OneWireTemperature(dts1, read_delay, "/coolantTemperature/oneWire");
 
@@ -99,7 +99,7 @@ void setup() {
       ->set_sort_order(200);
 
   auto compartment_temp_sk_output = new SKOutputFloat(
-      "environment.mainEngine.airTemperature", "/compartmentTemperature/skPath");
+      "environment.inside.engineRoom.Temperature", "/compartmentTemperature/skPath");
 
   ConfigItem(compartment_temp_sk_output)
       ->set_title("Engine Compartment Temperature Signal K Path")
@@ -109,7 +109,7 @@ void setup() {
   compartment_temp->connect_to(compartment_temp_calibration)
       ->connect_to(compartment_temp_sk_output);
 
-  // Measure exhaust temrature
+  // Measure exhaust elbow temperature
   auto* exhaust_temp =
       new OneWireTemperature(dts2, read_delay, "/exhaustTemperature/oneWire");
   
@@ -139,17 +139,6 @@ void setup() {
   exhaust_temp->connect_to(exhaust_temp_calibration)
       ->connect_to(exhaust_temp_sk_output);
 
-   //NOte: both alternator temps are on same bus (dts3)
-  // Measure temperature of 24v alternator
-  auto* alt_24v_temp =
-      new OneWireTemperature(dts3, read_delay, "/24vAltTemperature/oneWire");
-      auto* alt_24v_temp_calibration =
-      new Linear(1.0, 0.0, "/24vAltTemperature/linear");
-  auto* alt_24v_temp_sk_output = new SKOutputFloat(
-      "electrical.alternators.24V.temperature", "/24vAltTemperature/skPath");
-
-  alt_24v_temp->connect_to(alt_24v_temp_calibration)
-      ->connect_to(alt_24v_temp_sk_output);
 
   // Measure temperature of 12v alternator
   auto* alt_12v_temp =
@@ -169,7 +158,7 @@ void setup() {
       ->set_sort_order(800);
 
       auto* alt_12v_temp_sk_output = new SKOutputFloat(
-      "electrical.alternators.12V.temperature", "/12vAltTemperature/skPath");
+      "electrical.alternators.mainengine.temperature", "/12vAltTemperature/skPath");
 
   ConfigItem(alt_12v_temp_sk_output)
       ->set_title("12V alternator Temperature Signal K Path")
@@ -181,7 +170,7 @@ void setup() {
 
 
 //// Engine RPM measurement via magnetic pickup on 116 tooth gear
-const char* sk_path = "propulsion.main.revolutions";
+const char* sk_path = "propulsion.mainengine.revolutions";
 const char* config_path = "/sensors/engine_rpm";
 const char* config_path_calibrate = "/sensors/engine_rpm/calibrate";
 const char* config_path_skpath = "/sensors/engine_rpm/sk";
