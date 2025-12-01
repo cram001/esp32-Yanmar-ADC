@@ -30,7 +30,7 @@
 #include "sensesp/transforms/integrator.h"
 
 //engine hours
-// #include "engine_hours.h"
+#include "engine_hours.h"
 
 
 using namespace reactesp;
@@ -321,6 +321,29 @@ ConfigItem(fuel_flow_sk_output)
 
 fuel_flow_m3ph->connect_to(fuel_flow_sk_output);
 
+
+// ---------------------------------------------------------
+// ENGINE HOURS
+// ---------------------------------------------------------
+
+// Create engine-hours accumulator
+auto* engine_hours = new EngineHours("/engine/hours");
+
+// Add to SensESP UI
+ConfigItem(engine_hours)
+    ->set_title("Engine Hours")
+    ->set_description("Initial engine hours (user editable). Value increases whenever RPM > 500.")
+    ->set_sort_order(1300);
+
+// Feed RPM into the hour counter
+frequency->connect_to(engine_hours);
+
+// Output engine hours to Signal K
+auto* engine_hours_sk_output =
+    new SKOutputFloat("propulsion.mainEngine.runTime",
+                      "/engine/hours/skPath");
+
+engine_hours->connect_to(engine_hours_sk_output);
 
 
 }
