@@ -28,6 +28,9 @@
 #include "sensesp/transforms/linear.h"
 #include "sensesp/transforms/curveinterpolator.h"
 #include "sensesp/transforms/integrator.h"
+#include "sensesp/transforms/median.h"
+
+
 
 //engine hours
 #include "engine_hours.h"
@@ -226,29 +229,35 @@ const char* config_path_skpath = "/sensors/engine_rpm/sk";
       ->connect_to(frequency_sk_output);  // connect the output of Frequency()
                                           // to a Signal K Output as a number
 
+// ---------------------------------------------------------
 // Engine coolant temp sender
+// ---------------------------------------------------------
 
-  // ---------------------------------------------------------
-  // 2. Undo voltage divider (100k / 350k = 0.285714)
-  // ---------------------------------------------------------
-  constexpr float divider_gain = 3.5f;
+// Undo voltage divider (100k / 350k = 0.285714)
+constexpr float divider_gain = 3.5f;
 
-  auto* gauge_voltage =
-      adc_input->connect_to(new sensesp::Linear(divider_gain, 0.0));
-
-  // ---------------------------------------------------------
-  // 3. Convert gauge voltage to sender resistance
-  // ---------------------------------------------------------
-  constexpr float supply_voltage = 12.0f;
-  constexpr float rgauge = 1035.0f;
-
-  auto* sender_res =
-      gauge_voltage->connect_to(new SenderResistance(supply_voltage, rgauge));
+auto* gauge_voltage =
+    adc_input->connect_to(new sensesp::Linear(divider_gain, 0.0));
 
 // ---------------------------------------------------------
-// 4. Sender resistance → temperature (°C)
-// note: ignore the trailing f, it stands for "float", needed in C++
-//{resistance (ohms), temperature (°C)}
+// Apply Exponential Smoothing BEFORE resistance & curve
+// ---------------------------------------------------------
+const float ewma_alpha = 0.10f;   // Recommended for NTC senders
+
+auto* coolant_smoother =
+    gauge_voltage->connect_to(new sensesp::Median(5, "/coolant/median"));
+
+// ---------------------------------------------------------
+// Convert gauge voltage → sender resistance
+// ---------------------------------------------------------
+constexpr float supply_voltage = 12.0f;
+constexpr float rgauge = 1035.0f;
+
+auto* sender_res =
+    coolant_smoother->connect_to(new SenderResistance(supply_voltage, rgauge));
+
+// ---------------------------------------------------------
+// Sender resistance → temperature (°C)
 // ---------------------------------------------------------
 std::set<sensesp::CurveInterpolator::Sample> r_to_temp{
     { -1.0f,  0.0f },   // error state
@@ -258,33 +267,29 @@ std::set<sensesp::CurveInterpolator::Sample> r_to_temp{
     {88.0f,   70.0f},
     {112.0f,  72.0f},
     {104.0f,  76.7f},
-    {97.0f,  80.0f},
+    {97.0f,   80.0f},
     {90.9f,  82.5f},
     {85.5f,  85.0f},
     {45.0f, 100.0f},
-    {29.6f,  121.0f}
+    {29.6f, 121.0f}
 };
 
 auto* temp_c =
-    sender_res->connect_to(
-        new sensesp::CurveInterpolator(&r_to_temp)
-    );
+    sender_res->connect_to(new sensesp::CurveInterpolator(&r_to_temp));
 
 // ---------------------------------------------------------
-// 5. Output to Signal K
+// Output coolant temperature to Signal K
 // ---------------------------------------------------------
 auto* coolant_temp_sk_output =
     new SKOutputFloat("propulsion.mainEngine.coolantTemperature",
                       "/coolantTemperature/skPath");
 
+ConfigItem(coolant_temp_sk_output)
+    ->set_title("Coolant Temperature Signal K Path")
+    ->set_description("Signal K path for the coolant temperature")
+    ->set_sort_order(1100);
 
-  ConfigItem(coolant_temp_sk_output)
-      ->set_title("Coolant Temperature Signal K Path")
-      ->set_description("Signal K path for the coolant temperature")
-      ->set_sort_order(1100);
-  
-
-temp_c->connect_to(new SKOutputFloat("debug.coolant.temp", "/debug/coolant/temp"));
+temp_c->connect_to(coolant_temp_sk_output);
 
   // fuel flow sender
 
@@ -353,7 +358,7 @@ engine_hours->connect_to(engine_hours_sk_output);
 // ---------------------------------------------------------
 #include "debug_value.h"
 
-// Debug for ADC voltage
+// Debug corrected ADC voltage (after divider, before smoothing)
 auto* dbg_adc = new sensesp::DebugValue("ADC Voltage", "/debug/adc");
 ConfigItem(dbg_adc)
     ->set_title("ADC Voltage")
@@ -361,20 +366,28 @@ ConfigItem(dbg_adc)
     ->set_sort_order(2000);
 gauge_voltage->connect_to(dbg_adc);
 
-// Debug for sender resistance
+// Debug smoothed voltage
+auto* dbg_smooth = new sensesp::DebugValue("Smoothed Voltage", "/debug/coolant_smooth");
+ConfigItem(dbg_smooth)
+    ->set_title("Coolant Smoothed Voltage")
+    ->set_description("After EWMA smoothing, before resistance calc")
+    ->set_sort_order(2001);
+coolant_smoother->connect_to(dbg_smooth);
+
+// Debug resistance
 auto* dbg_res = new sensesp::DebugValue("Sender Resistance", "/debug/resistance");
 ConfigItem(dbg_res)
     ->set_title("Sender Resistance")
     ->set_description("Calculated resistance of coolant sender")
-    ->set_sort_order(2001);
+    ->set_sort_order(2002);
 sender_res->connect_to(dbg_res);
 
-// Debug for coolant temperature
+// Debug °C
 auto* dbg_temp = new sensesp::DebugValue("Coolant Temp", "/debug/temp");
 ConfigItem(dbg_temp)
     ->set_title("Coolant Temperature (debug)")
-    ->set_description("Temperature before mapping to Signal K")
-    ->set_sort_order(2002);
+    ->set_description("Temperature before sending to SK")
+    ->set_sort_order(2003);
 temp_c->connect_to(dbg_temp);
 
 // Debug raw RPM
