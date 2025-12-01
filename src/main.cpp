@@ -12,13 +12,23 @@
 #include "sensesp_app_builder.h"
 
 //onewire
-#include "sensesp/transforms/linear.h"
 #include "sensesp/ui/config_item.h"
 #include "sensesp_onewire/onewire_temperature.h"
 
 //engine RPM 
 #include "sensesp/transforms/frequency.h"
 #include "sensesp/sensors/digital_input.h"
+
+// coolant temp sender 
+#include "sender_resistance.h"
+#include "sensesp/sensors/analog_input.h"
+
+
+//transforms
+#include "sensesp/transforms/linear.h"
+#include "sensesp/transforms/curveinterpolator.h"
+
+
 
 
 using namespace reactesp;
@@ -60,6 +70,21 @@ void setup() {
   uint8_t s1_pin = 4;  //engine compartment
   uint8_t s2_pin = 16;  //exhaust elbow
   uint8_t s3_pin = 12;  //12v alternator
+
+// setup for coolant temp sender
+
+// ---------------------------------------------------------
+  // 1. ADC Input
+  // ---------------------------------------------------------
+  const uint8_t kAdcPin = 34;
+
+  auto* adc_input = new sensesp::AnalogInput(
+      kAdcPin,          // ADC GPIO
+      10.0,             // sample rate Hz
+      "/Coolant/adc"    // config path
+  );
+
+
 
   // setup for engine RPM
   uint8_t rpm_pin = 25; // GPIO pin where the magnetic pickup is connected
@@ -175,8 +200,7 @@ const char* config_path = "/sensors/engine_rpm";
 const char* config_path_calibrate = "/sensors/engine_rpm/calibrate";
 const char* config_path_skpath = "/sensors/engine_rpm/sk";
 
-
-   auto* rpm_sensor = new DigitalInputCounter(rpm_pin, INPUT_PULLUP, RISING, read_delay);
+  auto* rpm_sensor = new DigitalInputCounter(rpm_pin, INPUT_PULLUP, RISING, read_delay);
 
   auto frequency = new Frequency(multiplier, config_path_calibrate);
 
@@ -196,6 +220,59 @@ const char* config_path_skpath = "/sensors/engine_rpm/sk";
                                           // to the input of Frequency()
       ->connect_to(frequency_sk_output);  // connect the output of Frequency()
                                           // to a Signal K Output as a number
+
+// Engine coolant temp sender
+
+  // ---------------------------------------------------------
+  // 2. Undo voltage divider (100k / 350k = 0.285714)
+  // ---------------------------------------------------------
+  constexpr float divider_gain = 3.5f;
+
+  auto* gauge_voltage =
+      adc_input->connect_to(new sensesp::Linear(divider_gain, 0.0));
+
+  // ---------------------------------------------------------
+  // 3. Convert gauge voltage to sender resistance
+  // ---------------------------------------------------------
+  constexpr float supply_voltage = 12.0f;
+  constexpr float rgauge = 1035.0f;
+
+  auto* sender_res =
+      gauge_voltage->connect_to(new SenderResistance(supply_voltage, rgauge));
+
+// ---------------------------------------------------------
+// 4. Sender resistance → temperature (°C)
+// ---------------------------------------------------------
+std::set<sensesp::CurveInterpolator::Sample> r_to_temp{
+    { -1.0f,  0.0f },   // error state
+    {1352.0f, 12.7f},
+    {207.0f,  56.0f},
+    {112.0f,  72.0f},
+    {90.0f,   85.0f},
+    {29.6f,  121.0f}
+};
+
+auto* temp_c =
+    sender_res->connect_to(
+        new sensesp::CurveInterpolator(&r_to_temp)
+    );
+
+// ---------------------------------------------------------
+// 5. Output to Signal K
+// ---------------------------------------------------------
+auto* coolant_temp_sk_output =
+    new SKOutputFloat("propulsion.mainEngine.coolantTemperature",
+                      "/coolantTemperature/skPath");
+
+
+  ConfigItem(coolant_temp_sk_output)
+      ->set_title("Coolant Temperature Signal K Path")
+      ->set_description("Signal K path for the coolant temperature")
+      ->set_sort_order(1000);
+  
+
+temp_c->connect_to(temp_c)
+        ->connect_to(coolant_temp_sk_output);
 
 
 }
