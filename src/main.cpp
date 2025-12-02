@@ -37,14 +37,14 @@ using namespace sensesp;
 using namespace sensesp::onewire;
 
 // ============================================================================
-// FIREBEETLE 2 (DFRobot ESP32-E) PIN SELECTION — VERIFIED
+// FIREBEETLE 2 (DFRobot ESP32-E) PIN SELECTION
 // ============================================================================
 
 static const uint8_t PIN_TEMP_COMPARTMENT = 4;   // OneWire OK
 static const uint8_t PIN_TEMP_EXHAUST     = 16;  // OneWire OK
 static const uint8_t PIN_TEMP_ALT_12V     = 17;  // OneWire OK
 
-static const uint8_t PIN_ADC_COOLANT = 39;       // ADC1 (good)
+static const uint8_t PIN_ADC_COOLANT = 39;       // ADC1
 static const uint8_t PIN_RPM         = 25;       // PCNT-capable
 
 static const float RPM_TEETH = 116.0f;
@@ -57,16 +57,14 @@ static const float DIV_R1 = 250000.0f;
 static const float DIV_R2 = 100000.0f;
 static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
 
-// Coolant sender system values
+// Coolant sender constants
 static const float COOLANT_SUPPLY_VOLTAGE = 12.0f;
 static const float COOLANT_GAUGE_RESISTOR = 1035.0f;
 
 // OneWire polling
 static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 
-// ============================================================================
-// FORWARD DECLARATIONS
-// ============================================================================
+// Forward declarations
 void setup_temperature_sensors();
 void setup_coolant_sender();
 void setup_rpm_sensor();
@@ -115,45 +113,50 @@ void setup_temperature_sensors() {
   t_eng->connect_to(new Linear(1.0, 0.0))
        ->connect_to(new SKOutputFloat("environment.inside.engineRoom.temperature"));
 
-  // Exhaust Elbow Temperature
+  // Exhaust
   auto* t_exh = new OneWireTemperature(dts2, ONEWIRE_READ_DELAY_MS, "/t/exhaust");
   t_exh->connect_to(new Linear(1.0, 0.0))
        ->connect_to(new SKOutputFloat("propulsion.mainEngine.exhaustTemperature"));
 
-  // Alternator Temperature
+  // Alternator temperature
   auto* t_alt = new OneWireTemperature(dts3, ONEWIRE_READ_DELAY_MS, "/t/alt");
   t_alt->connect_to(new Linear(1.0, 0.0))
        ->connect_to(new SKOutputFloat("electrical.alternators.main.temperature"));
 }
 
 // ============================================================================
-// COOLANT SENDER (ADC → voltage → resistance → temp curve)
+// COOLANT SENDER (ADC → volts → resistance → curve)
 // ============================================================================
 void setup_coolant_sender() {
 
+  // 1. RAW ADC INPUT (0–4095)
   auto* adc = new AnalogInput(
       PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
-      "/coolant/adc",
-      3.3f
+      "/coolant/adc"
   );
 
-  // Undo divider
-  auto* v_corrected = adc->connect_to(
+  // 2. Convert raw ADC → volts
+  auto* volts = adc->connect_to(
+      new Linear(3.3f / 4095.0f, 0.0f, "/coolant/volts")
+  );
+
+  // 3. Undo divider
+  auto* v_corrected = volts->connect_to(
       new Linear(COOLANT_DIVIDER_GAIN, 0.0f, "/coolant/divider")
   );
 
-  // Reduce noise
+  // 4. Median filter
   auto* v_smooth = v_corrected->connect_to(
       new Median(5, "/coolant/median")
   );
 
-  // Convert V → Ohms
+  // 5. Voltage → sender resistance
   auto* sender_res = v_smooth->connect_to(
       new SenderResistance(COOLANT_SUPPLY_VOLTAGE, COOLANT_GAUGE_RESISTOR)
   );
 
-  // Coolant sender curve
+  // 6. Ohms → temperature curve
   std::set<CurveInterpolator::Sample> ohms_to_temp = {
       {-1.0f, 0.0f},
       {1352.0f, 12.7f},
@@ -172,14 +175,13 @@ void setup_coolant_sender() {
       new CurveInterpolator(&ohms_to_temp, "/coolant/curve")
   );
 
-  // Output coolant temperature
+  // Output to Signal K
   temp_C->connect_to(
       new SKOutputFloat("propulsion.mainEngine.coolantTemperature")
   );
 
-  // -----------------------------------------------------------------------
-  // FULL DEBUG → SK
-  // -----------------------------------------------------------------------
+  // DEBUG
+  volts->connect_to(new SKOutputFloat("debug.coolant.volts"));
   v_corrected->connect_to(new SKOutputFloat("debug.coolant.correctedVoltage"));
   sender_res->connect_to(new SKOutputFloat("debug.coolant.senderResistance"));
   temp_C->connect_to(new SKOutputFloat("debug.coolant.temperature"));
@@ -255,10 +257,10 @@ void setup_engine_hours() {
 }
 
 // ============================================================================
-// DEBUG PANEL (Signal K only — no UI widgets)
+// DEBUG PANEL
 // ============================================================================
 void setup_debug_panel() {
-  // Already handled above — all debug is emitted via SKOutputFloat
+  // All debug already connected
 }
 
 // ============================================================================
