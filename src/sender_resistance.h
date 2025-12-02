@@ -5,32 +5,30 @@
 class SenderResistance : public sensesp::Transform<float, float> {
  public:
   SenderResistance(float supply_voltage, float rgauge)
-      : supply_voltage_(supply_voltage), rgauge_(rgauge) {}
+      : Transform<float, float>("sender_resistance"),
+        supply_voltage_(supply_voltage),
+        rgauge_(rgauge) {}
 
-  // NOTE: DO NOT use "override". SensESP v3 signature differs internally.
-void set_input(float Vgauge, uint8_t input_channel = 0) {
+  // THE ONE AND ONLY CORRECT OVERRIDE FOR YOUR VERSION OF SENSESP
+  void set(const float& Vgauge) override {
 
-    // Detect missing sensor / floating ADC:
+    // Missing sender
     if (Vgauge < 0.05f) {
-        // Force sender resistance to "error"
-        this->output_ = -1.0f;   // impossible resistance
-        this->notify();
+        this->emit(-1.0f);
         return;
     }
 
-    // If gauge voltage is impossible, send NaN
+    // Out of range
     if (Vgauge >= supply_voltage_ || Vgauge < 0.0f) {
-        this->output_ = NAN;
-        this->notify();
+        this->emit(NAN);
         return;
     }
 
-    // Normal operation:
+    // Compute sender resistance
     float Rsender = rgauge_ * (Vgauge / (supply_voltage_ - Vgauge));
 
-    this->output_ = Rsender;
-    this->notify();
-}
+    this->emit(Rsender);
+  }
 
  private:
   float supply_voltage_;

@@ -2,13 +2,13 @@
 // Yanmar Diesel Engine Monitoring - SensESP v3.1.1
 // ============================================================================
 // Features:
+//  - Coolant sender via ADC (FireBeetle calibrated)
 //  - 3x OneWire temperature sensors
-//  - Coolant sender via ADC + divider → resistance → temp curve
-//  - RPM via magnetic pickup (PCNT-capable pin)
-//  - Fuel flow estimation (RPM → LPH → m³/hr)
+//  - RPM via magnetic pickup
+//  - Fuel flow estimation
 //  - Engine hours accumulator
-//  - FULL DEBUG OUTPUT to Signal K (/debug/*)
-//  - OTA support
+//  - SK debug output
+//  - OTA update
 // ============================================================================
 
 #include <memory>
@@ -37,40 +37,43 @@ using namespace sensesp;
 using namespace sensesp::onewire;
 
 // ============================================================================
-// FIREBEETLE 2 (DFRobot ESP32-E) PIN SELECTION
+// FORWARD DECLARATIONS  (Required for C++ compilation order)
 // ============================================================================
-
-static const uint8_t PIN_TEMP_COMPARTMENT = 4;   // OneWire OK
-static const uint8_t PIN_TEMP_EXHAUST     = 16;  // OneWire OK
-static const uint8_t PIN_TEMP_ALT_12V     = 17;  // OneWire OK
-
-static const uint8_t PIN_ADC_COOLANT = 39;       // ADC1
-static const uint8_t PIN_RPM         = 25;       // PCNT-capable
-
-static const float RPM_TEETH = 116.0f;
-static const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
-
-static const float ADC_SAMPLE_RATE_HZ = 10.0f;
-
-// Voltage divider
-static const float DIV_R1 = 250000.0f;
-static const float DIV_R2 = 100000.0f;
-static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
-
-// Coolant sender constants
-static const float COOLANT_SUPPLY_VOLTAGE = 12.0f;
-static const float COOLANT_GAUGE_RESISTOR = 1035.0f;
-
-// OneWire polling
-static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
-
-// Forward declarations
 void setup_temperature_sensors();
 void setup_coolant_sender();
 void setup_rpm_sensor();
 void setup_fuel_flow();
 void setup_engine_hours();
-void setup_debug_panel();
+
+// ============================================================================
+// PIN DEFINITIONS — FIREBEETLE ESP32-E
+// ============================================================================
+static const uint8_t PIN_TEMP_COMPARTMENT = 4;
+static const uint8_t PIN_TEMP_EXHAUST     = 16;
+static const uint8_t PIN_TEMP_ALT_12V     = 17;
+
+static const uint8_t PIN_ADC_COOLANT      = 39;   // ADC1
+static const uint8_t PIN_RPM              = 25;   // PCNT-capable
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+static const float ADC_SAMPLE_RATE_HZ     = 10.0f;
+
+// Voltage divider used on coolant sender
+static const float DIV_R1 = 250000.0f;
+static const float DIV_R2 = 100000.0f;
+static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
+
+// Coolant sender system parameters
+static const float COOLANT_SUPPLY_VOLTAGE = 12.0f;
+static const float COOLANT_GAUGE_RESISTOR = 1035.0f;
+
+static const float RPM_TEETH = 116.0f;
+static const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
+
+// OneWire polling
+static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 
 // Globals
 Frequency* g_frequency = nullptr;
@@ -96,7 +99,6 @@ void setup() {
   setup_rpm_sensor();
   setup_fuel_flow();
   setup_engine_hours();
-  setup_debug_panel();
 }
 
 // ============================================================================
@@ -104,83 +106,87 @@ void setup() {
 // ============================================================================
 void setup_temperature_sensors() {
 
-  auto* dts1 = new DallasTemperatureSensors(PIN_TEMP_COMPARTMENT);
-  auto* dts2 = new DallasTemperatureSensors(PIN_TEMP_EXHAUST);
-  auto* dts3 = new DallasTemperatureSensors(PIN_TEMP_ALT_12V);
+  auto* s1 = new DallasTemperatureSensors(PIN_TEMP_COMPARTMENT);
+  auto* s2 = new DallasTemperatureSensors(PIN_TEMP_EXHAUST);
+  auto* s3 = new DallasTemperatureSensors(PIN_TEMP_ALT_12V);
 
-  // Engine Room Temperature
-  auto* t_eng = new OneWireTemperature(dts1, ONEWIRE_READ_DELAY_MS, "/t/engine");
-  t_eng->connect_to(new Linear(1.0, 0.0))
-       ->connect_to(new SKOutputFloat("environment.inside.engineRoom.temperature"));
+  auto* t1 = new OneWireTemperature(s1, ONEWIRE_READ_DELAY_MS, "/t/engine");
+  t1->connect_to(new Linear(1.0, 0.0))
+     ->connect_to(new SKOutputFloat("environment.inside.engineRoom.temperature"));
 
-  // Exhaust
-  auto* t_exh = new OneWireTemperature(dts2, ONEWIRE_READ_DELAY_MS, "/t/exhaust");
-  t_exh->connect_to(new Linear(1.0, 0.0))
-       ->connect_to(new SKOutputFloat("propulsion.mainEngine.exhaustTemperature"));
+  auto* t2 = new OneWireTemperature(s2, ONEWIRE_READ_DELAY_MS, "/t/exhaust");
+  t2->connect_to(new Linear(1.0, 0.0))
+     ->connect_to(new SKOutputFloat("propulsion.mainEngine.exhaustTemperature"));
 
-  // Alternator temperature
-  auto* t_alt = new OneWireTemperature(dts3, ONEWIRE_READ_DELAY_MS, "/t/alt");
-  t_alt->connect_to(new Linear(1.0, 0.0))
-       ->connect_to(new SKOutputFloat("electrical.alternators.main.temperature"));
+  auto* t3 = new OneWireTemperature(s3, ONEWIRE_READ_DELAY_MS, "/t/alt");
+  t3->connect_to(new Linear(1.0, 0.0))
+     ->connect_to(new SKOutputFloat("electrical.alternators.main.temperature"));
 }
 
 // ============================================================================
-// COOLANT SENDER (ADC → volts → resistance → curve)
+// COOLANT SENDER — FireBeetle ADC calibration applied
+// ============================================================================
+// ADC raw → volts (scaled) → divider correction → median → resistance → temp
 // ============================================================================
 void setup_coolant_sender() {
 
-  // 1. RAW ADC INPUT (0–4095)
-  auto* adc = new AnalogInput(
+  // 1. ADC RAW INPUT (FireBeetle returns oversampled raw counts)
+  auto* adc_raw = new AnalogInput(
       PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
-      "/coolant/adc"
+      "/coolant/adc_raw"
   );
 
-  // 2. Convert raw ADC → volts
-  auto* volts = adc->connect_to(
-      new Linear(3.3f / 4095.0f, 0.0f, "/coolant/volts")
+  // 2. Convert raw ADC → actual volts
+  //
+  // Calibration constant determined experimentally:
+  //
+  //      volts = raw_adc × 0.000001067
+  //
+  auto* volts = adc_raw->connect_to(
+      new Linear(0.000001067f, 0.0f, "/coolant/volts")
   );
 
-  // 3. Undo divider
+  // 3. Undo voltage divider
   auto* v_corrected = volts->connect_to(
-      new Linear(COOLANT_DIVIDER_GAIN, 0.0f, "/coolant/divider")
+      new Linear(COOLANT_DIVIDER_GAIN, 0.0f, "/coolant/corrected")
   );
 
-  // 4. Median filter
+  // 4. Smooth noise with median filter
   auto* v_smooth = v_corrected->connect_to(
       new Median(5, "/coolant/median")
   );
 
-  // 5. Voltage → sender resistance
+  // 5. Convert sensed voltage → resistance of the coolant sender
   auto* sender_res = v_smooth->connect_to(
       new SenderResistance(COOLANT_SUPPLY_VOLTAGE, COOLANT_GAUGE_RESISTOR)
   );
 
-  // 6. Ohms → temperature curve
-  std::set<CurveInterpolator::Sample> ohms_to_temp = {
-      {-1.0f, 0.0f},
-      {1352.0f, 12.7f},
-      {207.0f, 56.0f},
-      {131.0f, 63.9f},
-      {112.0f, 72.0f},
-      {104.0f, 76.7f},
-      {97.0f, 80.0f},
-      {90.9f, 82.5f},
-      {85.5f, 85.0f},
-      {45.0f, 100.0f},
-      {29.6f, 121.0f}
-  };
+  // 6. Convert resistance → temperature (°C)
+std::set<CurveInterpolator::Sample> ohms_to_temp = {
+    {29.6f, 121.0f},
+    {45.0f, 100.0f},
+    {85.5f, 85.0f},
+    {90.9f, 82.5f},
+    {97.0f, 80.0f},
+    {104.0f, 76.7f},
+    {112.0f, 72.0f},
+    {131.0f, 63.9f},
+    {207.0f, 56.0f},
+    {1352.0f, 12.7f}
+};
+
 
   auto* temp_C = sender_res->connect_to(
-      new CurveInterpolator(&ohms_to_temp, "/coolant/curve")
+      new CurveInterpolator(&ohms_to_temp, "/coolant/temp_curve")
   );
 
-  // Output to Signal K
+  // 7. Output to Signal K
   temp_C->connect_to(
       new SKOutputFloat("propulsion.mainEngine.coolantTemperature")
   );
 
-  // DEBUG
+  // DEBUG OUTPUTS
   volts->connect_to(new SKOutputFloat("debug.coolant.volts"));
   v_corrected->connect_to(new SKOutputFloat("debug.coolant.correctedVoltage"));
   sender_res->connect_to(new SKOutputFloat("debug.coolant.senderResistance"));
@@ -188,7 +194,7 @@ void setup_coolant_sender() {
 }
 
 // ============================================================================
-// RPM SENSOR (PCNT-capable pin)
+// RPM SENSOR
 // ============================================================================
 void setup_rpm_sensor() {
 
@@ -197,17 +203,14 @@ void setup_rpm_sensor() {
 
   g_frequency = new Frequency(RPM_MULTIPLIER, "/rpm/cal");
 
-  auto* rpm_sk =
-      new SKOutputFloat("propulsion.mainEngine.revolutions");
+  rpm_input->connect_to(g_frequency)
+           ->connect_to(new SKOutputFloat("propulsion.mainEngine.revolutions"));
 
-  rpm_input->connect_to(g_frequency)->connect_to(rpm_sk);
-
-  // Debug
   g_frequency->connect_to(new SKOutputFloat("debug.rpm"));
 }
 
 // ============================================================================
-// FUEL FLOW (ESTIMATED)
+// FUEL FLOW
 // ============================================================================
 void setup_fuel_flow() {
 
@@ -222,24 +225,23 @@ void setup_fuel_flow() {
       {3800, 6.0f}
   };
 
-  auto* fuel_lph =
-      g_frequency->connect_to(
-          new CurveInterpolator(&rpm_to_lph, "/fuel/curve")
-      );
+  auto* fuel_lph = g_frequency->connect_to(
+      new CurveInterpolator(&rpm_to_lph, "/fuel/lph_curve")
+  );
 
-  auto* fuel_m3 =
-      fuel_lph->connect_to(new Linear(0.001f, 0.0f, "/fuel/m3"));
+  auto* fuel_m3 = fuel_lph->connect_to(
+      new Linear(0.001f, 0.0f, "/fuel/m3")
+  );
 
   fuel_m3->connect_to(
       new SKOutputFloat("propulsion.mainEngine.fuel.rate")
   );
 
-  // Debug
   fuel_lph->connect_to(new SKOutputFloat("debug.fuel.lph"));
 }
 
 // ============================================================================
-// ENGINE HOURS ACCUMULATOR
+// ENGINE HOURS
 // ============================================================================
 void setup_engine_hours() {
 
@@ -247,20 +249,8 @@ void setup_engine_hours() {
 
   g_frequency->connect_to(hours);
 
-  // SK Output
-  hours->connect_to(
-      new SKOutputFloat("propulsion.mainEngine.runTime")
-  );
-
-  // Debug
+  hours->connect_to(new SKOutputFloat("propulsion.mainEngine.runTime"));
   hours->connect_to(new SKOutputFloat("debug.engineHours"));
-}
-
-// ============================================================================
-// DEBUG PANEL
-// ============================================================================
-void setup_debug_panel() {
-  // All debug already connected
 }
 
 // ============================================================================
