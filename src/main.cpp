@@ -5,15 +5,11 @@
 //  - 3x OneWire temperature sensors (each with seperate esp32 pin)
 //  - Coolant sender temperature via ADC + divider + smoothing + curve interpolation
 //  - RPM via magnetic pickup
-//  - Fuel flow estimation via RPM → LPH → m³/hr
+//  - Fuel flow estimation via RPM → LPH → m³/hr (for Yanmar3JH3E with 17x13 RH 3 blade prop)
 //  - Engine hours accumulator (UI-editable initial hours)
 //  - Debug values sent to Signal K
 // Web UI for config (wifi, SignalK server, etc...)
-//
-// Fully SensESP v3.1.1 compliant
-// - ConfigItem only applied to Serializable + Saveable types
-// - Clean helper functions
-// - Sorted UI ordering (Option B: 10-step spacing)
+// 4MB flash required to enable OTA update (min). 8MB or more recommended for future expansion.
 // ============================================================================
 
 #include <memory>
@@ -50,24 +46,24 @@ extern "C" {
 
 
 // ============================================================================
-// USER CONFIGURABLE CONSTANTS
+// USER CONFIGURABLE CONSTANTS, select GPIO pins carefully!
 // ============================================================================
 
 // OneWire pins
 static const uint8_t PIN_TEMP_COMPARTMENT = 4;
 static const uint8_t PIN_TEMP_EXHAUST     = 16;
-static const uint8_t PIN_TEMP_ALT_12V     = 12;
+static const uint8_t PIN_TEMP_ALT_12V     = 15;
 
 // ADC pin for coolant sender
 static const uint8_t PIN_ADC_COOLANT = 34;
 
 // RPM magnetic pickup
-static const uint8_t PIN_RPM  = 25;
-static const float   RPM_TEETH = 116.0f;
+static const uint8_t PIN_RPM  = 35;
+static const float   RPM_TEETH = 116.0f;   // Yanmar 3JH3E ring gear has 116 teeth
 
 // Voltage divider for coolant sender
-static const float DIV_R1 = 250000.0f;
-static const float DIV_R2 = 100000.0f;
+static const float DIV_R1 = 250000.0f;    //R1 voltage divider resistor (ohms)
+static const float DIV_R2 = 100000.0f;    //R2 voltage divider resistor (ohms)
 static const float DIV_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
 
 // Coolant sender characteristics
@@ -112,7 +108,7 @@ void setup() {
 
   builder.set_hostname("esp32-yanmar")
       ->set_wifi_client("papasmurf2", "2flyornot2fly")
-      ->enable_ota("bateau1!")
+      ->enable_ota("$esp32auth1!")
       ->set_sk_server("192.168.150.95", 3000);
 
   sensesp_app = builder.get_app();
