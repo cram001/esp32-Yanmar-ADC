@@ -48,13 +48,13 @@ using namespace sensesp::onewire;
 // OneWire pins
 static const uint8_t PIN_TEMP_COMPARTMENT = 4;
 static const uint8_t PIN_TEMP_EXHAUST     = 16;
-static const uint8_t PIN_TEMP_ALT_12V     = 15;
+static const uint8_t PIN_TEMP_ALT_12V     = 17;
 
 // ADC pin for coolant sender
 static const uint8_t PIN_ADC_COOLANT = 34;
 
 // RPM magnetic pickup
-static const uint8_t PIN_RPM  = 35;
+static const uint8_t PIN_RPM  = 25;
 static const float   RPM_TEETH = 116.0f;   // Yanmar 3JH3E ring gear has 116 teeth
 
 // Voltage divider for coolant sender
@@ -68,6 +68,13 @@ static const float COOLANT_GAUGE_RESISTOR = 1035.0f;
 
 // OneWire sample rate
 static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
+
+
+// SETUP
+
+static const float ADC_SAMPLE_RATE_HZ = 10.0f;
+static const float COOLANT_DIVIDER_GAIN = DIV_GAIN;   // consistent name
+static const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
 
 
 // ============================================================================
@@ -92,9 +99,9 @@ void setup() {
   SensESPAppBuilder builder;
 
   builder.set_hostname("esp32-yanmar")
-      ->set_wifi_client("papasmurf2", "2flyornot2fly")
-      ->enable_ota("$esp32auth1!")
-      ->set_sk_server("192.168.150.95", 3000);
+      ->set_wifi_client("wifi_ssid", "wifi_passphrase")  //change your network info here
+      ->enable_ota("esp32!")  //OTA connect password (notfor wifi)
+      ->set_sk_server("192.168.150.95", 3000); //change to your Signal K server address
 
   sensesp_app = builder.get_app();
 
@@ -112,9 +119,9 @@ void setup() {
 // ============================================================================
 void setup_temperature_sensors() {
 
-  auto* dts1 = new DallasTemperatureSensors(PIN_1WIRE_ENGINE);
-  auto* dts2 = new DallasTemperatureSensors(PIN_1WIRE_EXHAUST);
-  auto* dts3 = new DallasTemperatureSensors(PIN_1WIRE_ALT);
+  auto* dts1 = new DallasTemperatureSensors(PIN_TEMP_COMPARTMENT);
+  auto* dts2 = new DallasTemperatureSensors(PIN_TEMP_EXHAUST);
+  auto* dts3 = new DallasTemperatureSensors(PIN_TEMP_ALT_12V);
 
   // ENGINE COMPARTMENT TEMP
   auto* t_engine =
@@ -167,7 +174,7 @@ void setup_coolant_sender() {
 
   // Raw ADC voltage input (0–3.3 V)
   auto* adc_input = new AnalogInput(
-      PIN_COOLANT_ADC,
+      PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
       "/coolant/adc",
       3.3       // ADC ---> Volts (VS2 method)
