@@ -181,8 +181,12 @@ std::set<CurveInterpolator::Sample> ohms_to_temp = {
       new CurveInterpolator(&ohms_to_temp, "/coolant/temp_curve")
   );
 
-  // 7. Output to Signal K
-  temp_C->connect_to(
+// 7. Convert °C → Kelvin for SK-compliant output
+auto* temp_K = temp_C->connect_to(
+      new Linear(1.0f, 273.15f, "/coolant/temp_K")
+  );
+
+temp_K->connect_to(
       new SKOutputFloat("propulsion.mainEngine.coolantTemperature")
   );
 
