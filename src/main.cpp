@@ -38,6 +38,10 @@
 #include "sender_resistance.h"
 #include "engine_hours.h"
 
+#ifdef RPM_SIMULATOR
+#include "rpm_simulator.h"
+#endif
+
 using namespace sensesp;
 using namespace sensesp::onewire;
 
@@ -87,6 +91,11 @@ Frequency* g_frequency = nullptr;
 // SETUP
 // ============================================================================
 void setup() {
+
+#ifdef RPM_SIMULATOR
+  Serial.println("RPM SIMULATOR ACTIVE");
+  setupRPMSimulator();
+#endif
 
   SetupLogging();
 
@@ -386,8 +395,9 @@ ConfigItem(sender_res_scaled)
 // ============================================================================
 void setup_rpm_sensor() {
 
-  auto* rpm_input =
-      new DigitalInputCounter(PIN_RPM, INPUT_PULLUP, RISING, 100);
+auto* rpm_input =
+    new DigitalInputCounter(PIN_RPM, INPUT, CHANGE, 0);
+
 
   g_frequency = new Frequency(RPM_MULTIPLIER,
                               "/config/sensors/rpm/frequency");
@@ -514,6 +524,21 @@ void setup_engine_hours() {
 // LOOP
 // ============================================================================
 void loop() {
-  sensesp_app->get_event_loop()->tick();
+
+#ifdef RPM_SIMULATOR
+    // OPTIONAL: print pulse count without blocking
+    static uint32_t last_debug = 0;
+    if (millis() - last_debug > 200) {
+        Serial.printf("Pulses: %u\n", pulse_count);
+        last_debug = millis();
+    }
+#endif
+
+    sensesp_app->get_event_loop()->tick();
+
+#ifdef RPM_SIMULATOR
+    loopRPMSimulator();
+#endif
 }
+
 
