@@ -416,6 +416,19 @@ auto* rpm_input =
       ->set_sort_order(500);
 
   g_frequency->connect_to(new SKOutputFloat("debug.rpm"));
+
+// Debug output in actual RPM
+auto* rpm_debug = g_frequency->connect_to(
+    new LambdaTransform<float, float>([](float hz) {
+        return hz * 60.0f;   // Convert revolutions/second → RPM
+    })
+);
+
+rpm_debug->connect_to(
+    new SKOutputFloat("debug.rpm_readable")   // new debug path
+);
+
+
 }
 
 // ============================================================================
@@ -427,56 +440,77 @@ auto* rpm_input =
 
 void setup_fuel_flow() {
 
-  std::set<CurveInterpolator::Sample> rpm_to_lph = {
-      {500, 0.6f}, {850, 0.7f}, {1500, 1.8f}, {2000, 2.3f},
-      {2800, 2.7f}, {3000, 3.0f}, {3400, 4.5f}, {3800, 6.0f}
+  // -------------------------
+  // 1) Convert frequency (Hz) → RPM
+  // -------------------------
+  auto* rpm_input = g_frequency->connect_to(
+      new LambdaTransform<float, float>([](float hz) {
+        return hz * 60.0f;  // rev/s → RPM
+      })
+  );
+
+  // Debug readable RPM
+  rpm_input->connect_to(new SKOutputFloat(
+      "debug.rpm_readable",
+      "/config/outputs/sk/debug_rpm_readable"
+  ));
+
+  // -------------------------
+  // 2) RPM → Liters per hour curve
+  // -------------------------
+  static std::set<CurveInterpolator::Sample> rpm_to_lph = {
+      {500, 0.6},
+      {850, 0.7},
+      {1500, 1.8},
+      {2000, 2.3},
+      {2800, 2.7},
+      {3600, 3.4},
   };
 
-  auto* fuel_lph = g_frequency->connect_to(
+  auto* fuel_lph = rpm_input->connect_to(
       new CurveInterpolator(&rpm_to_lph,
                             "/config/sensors/fuel/lph_curve")
   );
 
-  // Filter out RPM < 600 → return NAN
-  auto* filtered_lph = fuel_lph->connect_to(
-      new LambdaTransform<float, float>(
-          [](float lph) -> float {
-            float rpm = g_frequency->get();
-            if (rpm < 600) {
-              return NAN;     // Signal K will not publish this
-            }
-            return lph;
-          }
-      )
+  fuel_lph->connect_to(new SKOutputFloat(
+      "debug.fuel.lph",
+      "/config/outputs/sk/debug_fuel_lph"
+  ));
+
+
+  // -------------------------
+  // 3) Convert LPH → m³/s  
+  //    Only send if RPM ≥ 600
+  // -------------------------
+  auto* fuel_m3s = rpm_input->connect_to(
+      new LambdaTransform<float, float>([fuel_lph](float rpm) {
+        if (rpm < 600) {
+          return NAN;     // Signal K will ignore it instead of showing null
+        }
+
+        float lph = fuel_lph->get();
+        if (!isnan(lph)) {
+          return (lph / 1000.0f) / 3600.0f;  // L → m³, hr → sec
+        }
+
+        return NAN;
+      })
   );
 
-  // Convert LPH → m³/sec
-  // 1 LPH = 2.7777778e-7 m³/s
-  auto* fuel_m3s = filtered_lph->connect_to(
-      new Linear(2.7777778e-7f, 0.0f,
-                 "/config/sensors/fuel/m3_per_sec")
-  );
-
-  auto* sk_fuel = new SKOutputFloat(
+  // -------------------------
+  // 4) Output final fuel rate in m³/s → Signal K
+  // -------------------------
+  fuel_m3s->connect_to(new SKOutputFloat(
       "propulsion.mainEngine.fuel.rate",
-      "/config/outputs/sk/fuel_rate"
-  );
+      "/config/outputs/sk/fuel_rate_m3s"
+  ));
 
-  fuel_m3s->connect_to(sk_fuel);
-
-  // Config Items
-  ConfigItem(fuel_lph)->set_title("Fuel Flow Curve")
-      ->set_description("Curve interpolator for engine RPM → LPH")
-      ->set_sort_order(600);
-
-  ConfigItem(sk_fuel)->set_title("Fuel Rate SK Path")
-      ->set_description("Signal K path for engine fuel rate (m³/sec)")
-      ->set_sort_order(601);
-
-  // Debug original LPH
-  fuel_lph->connect_to(new SKOutputFloat("debug.fuel.lph"));
+  // Debug m³/s output
+  fuel_m3s->connect_to(new SKOutputFloat(
+      "debug.fuel.m3s",
+      "/config/outputs/sk/debug_fuel_m3s"
+  ));
 }
-
 
 // ============================================================================
 // ENGINE HOURS — UI + EDITABLE SK PATH
