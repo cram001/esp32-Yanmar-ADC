@@ -41,6 +41,7 @@
 // Custom transforms
 #include "sender_resistance.h"
 #include "engine_hours.h"
+#include "engine_load.h"
 
 #ifdef RPM_SIMULATOR
 #include "rpm_simulator.h"
@@ -90,6 +91,9 @@ static const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
 static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 
 Frequency* g_frequency = nullptr;
+Transform<float, float>* g_fuel_lph = nullptr;  // FIXED
+
+
 
 // ============================================================================
 // SETUP
@@ -117,6 +121,8 @@ void setup() {
   setup_rpm_sensor();
   setup_fuel_flow();
   setup_engine_hours();
+  setup_engine_load(g_frequency, g_fuel_lph);
+
 }
 
 // ============================================================================
@@ -421,6 +427,14 @@ auto* rpm_input =
 
   g_frequency->connect_to(new SKOutputFloat("debug.rpm"));
 
+// A readable RPM signal for engine load calculations
+auto* rpm_rpm = g_frequency->connect_to(
+    new LambdaTransform<float, float>([](float hz) {
+        return hz * 60.0f;   // Hz → RPM
+    })
+);
+
+
 // Debug output in actual RPM
 auto* rpm_debug = g_frequency->connect_to(
     new LambdaTransform<float, float>([](float hz) {
@@ -476,10 +490,13 @@ void setup_fuel_flow() {
                             "/config/sensors/fuel/lph_curve")
   );
 
+  
   fuel_lph->connect_to(new SKOutputFloat(
       "debug.fuel.lph",
       "/config/outputs/sk/debug_fuel_lph"
   ));
+
+g_fuel_lph = fuel_lph;   // expose to engine_load module
 
 
   // -------------------------
@@ -514,7 +531,16 @@ void setup_fuel_flow() {
       "debug.fuel.m3s",
       "/config/outputs/sk/debug_fuel_m3s"
   ));
+  g_fuel_lph = fuel_lph;  // expose for engine load calc
+
 }
+
+// ============================================================================
+// ENGINE LOAD
+// ============================================================================
+
+
+
 
 // ============================================================================
 // ENGINE HOURS — UI + EDITABLE SK PATH
