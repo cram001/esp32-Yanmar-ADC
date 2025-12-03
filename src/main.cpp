@@ -9,6 +9,7 @@
 //  - Engine hours accumulator
 //  - SK debug output
 //  - OTA update
+// values sent to SignalK IAW https://signalk.org/specification/1.5.0/doc/vesselsBranch.html
 // ============================================================================
 // ============================================================================
 
@@ -312,6 +313,10 @@ void setup_rpm_sensor() {
 // ============================================================================
 // FUEL FLOW — UI + EDITABLE SK PATH  engine RPM to LPH curve
 // ============================================================================
+
+
+#include "sensesp/transforms/lambda_transform.h"   // ← REQUIRED
+
 void setup_fuel_flow() {
 
   std::set<CurveInterpolator::Sample> rpm_to_lph = {
@@ -324,9 +329,24 @@ void setup_fuel_flow() {
                             "/config/sensors/fuel/lph_curve")
   );
 
-  auto* fuel_m3 = fuel_lph->connect_to(
-      new Linear(0.001f, 0.0f,
-                 "/config/sensors/fuel/m3")
+  // Filter out RPM < 600 → return NAN
+  auto* filtered_lph = fuel_lph->connect_to(
+      new LambdaTransform<float, float>(
+          [](float lph) -> float {
+            float rpm = g_frequency->get();
+            if (rpm < 600) {
+              return NAN;     // Signal K will not publish this
+            }
+            return lph;
+          }
+      )
+  );
+
+  // Convert LPH → m³/sec
+  // 1 LPH = 2.7777778e-7 m³/s
+  auto* fuel_m3s = filtered_lph->connect_to(
+      new Linear(2.7777778e-7f, 0.0f,
+                 "/config/sensors/fuel/m3_per_sec")
   );
 
   auto* sk_fuel = new SKOutputFloat(
@@ -334,40 +354,63 @@ void setup_fuel_flow() {
       "/config/outputs/sk/fuel_rate"
   );
 
-  fuel_m3->connect_to(sk_fuel);
+  fuel_m3s->connect_to(sk_fuel);
 
+  // Config Items
   ConfigItem(fuel_lph)->set_title("Fuel Flow Curve")
-      ->set_description("Curve interpolator for fuel flow based on RPM RPM to LPH curve")
+      ->set_description("Curve interpolator for engine RPM → LPH")
       ->set_sort_order(600);
 
   ConfigItem(sk_fuel)->set_title("Fuel Rate SK Path")
-      ->set_description("Signal K path for engine fuel rate")
+      ->set_description("Signal K path for engine fuel rate (m³/sec)")
       ->set_sort_order(601);
-    
 
+  // Debug original LPH
   fuel_lph->connect_to(new SKOutputFloat("debug.fuel.lph"));
 }
+
 
 // ============================================================================
 // ENGINE HOURS — UI + EDITABLE SK PATH
 // ============================================================================
+#include "sensesp/transforms/linear.h"
+
 void setup_engine_hours() {
 
+  // EngineHours stores the accumulated hours (float, in hours)
   auto* hours = new EngineHours("/config/sensors/engine_hours");
 
+  // Convert hours → seconds for Signal K output
+  // 1 hour = 3600 seconds
+  auto* hours_to_seconds = hours->connect_to(
+      new Linear(3600.0f, 0.0f, "/config/sensors/engine_hours_to_seconds")
+  );
+
+  // Signal K output in SECONDS
   auto* sk_hours = new SKOutputFloat(
       "propulsion.mainEngine.runTime",
       "/config/outputs/sk/engine_hours"
   );
 
+  // Connect RPM signal → hours accumulator
   g_frequency->connect_to(hours);
 
-  hours->connect_to(sk_hours);
+  // Output to SK in seconds
+  hours_to_seconds->connect_to(sk_hours);
+
+  // Debug (still outputs hours)
   hours->connect_to(new SKOutputFloat("debug.engineHours"));
 
-  ConfigItem(hours)->set_title("Engine Hours Accumulator");
-  ConfigItem(sk_hours)->set_title("Engine Hours SK Path");
+  // UI configuration remains in HOURS
+  ConfigItem(hours)
+      ->set_title("Engine Hours Accumulator")
+      ->set_description("Tracks total engine run time in hours");
+
+  ConfigItem(sk_hours)
+      ->set_title("Engine Run Time SK Path")
+      ->set_description("Signal K path for engine runtime (seconds)");
 }
+
 
 // ============================================================================
 // LOOP
