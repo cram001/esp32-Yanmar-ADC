@@ -1,33 +1,81 @@
 #pragma once
 
 #include "sensesp/transforms/transform.h"
+#include <cmath>
 
 class SenderResistance : public sensesp::Transform<float, float> {
+
  public:
   SenderResistance(float supply_voltage, float rgauge)
       : Transform<float, float>("sender_resistance"),
         supply_voltage_(supply_voltage),
         rgauge_(rgauge) {}
 
-  // THE ONE AND ONLY CORRECT OVERRIDE FOR YOUR VERSION OF SENSESP
   void set(const float& Vgauge) override {
 
-    // Missing sender
-    if (Vgauge < 0.05f) {
-        this->emit(-1.0f);
-        return;
+    // ============================================================
+    // 1. Handle invalid ADC values
+    // ============================================================
+    if (std::isnan(Vgauge) || std::isinf(Vgauge)) {
+      emit(NAN);
+      return;
     }
 
-    // Out of range
-    if (Vgauge >= supply_voltage_ || Vgauge < 0.0f) {
-        this->emit(NAN);
-        return;
+    // A floating input or open sender will often read ~0.00–0.03V
+    if (Vgauge < 0.03f) {
+      // Open circuit or no coolant sender connected
+      emit(NAN);
+      return;
     }
 
-    // Compute sender resistance
-    float Rsender = rgauge_ * (Vgauge / (supply_voltage_ - Vgauge));
+    // Any voltage too close to Vsupply is physically impossible
+    if (Vgauge >= (supply_voltage_ - 0.05f)) {
+      // Short-to-supply, sender open, wiring fault
+      emit(NAN);
+      return;
+    }
 
-    this->emit(Rsender);
+    // Negative voltage is always invalid
+    if (Vgauge <= 0.0f) {
+      emit(NAN);
+      return;
+    }
+
+    // ============================================================
+    // 2. Compute sender resistance
+    //    Rsender = Rgauge * (Vsender / (Vsupply - Vsender))
+    // ============================================================
+
+    float denom = supply_voltage_ - Vgauge;
+
+    // Safety: never divide by zero
+    if (denom < 0.01f) {
+      emit(NAN);
+      return;
+    }
+
+    float Rsender = rgauge_ * (Vgauge / denom);
+
+    // ============================================================
+    // 3. Additional sanity checks
+    // ============================================================
+
+    if (Rsender < 5.0f) {
+      // Shorted thermistor or wiring fault
+      emit(NAN);
+      return;
+    }
+
+    if (Rsender > 100000.0f) {
+      // Open circuit or impossible value
+      emit(NAN);
+      return;
+    }
+
+    // ============================================================
+    // 4. Everything OK → output ohms
+    // ============================================================
+    emit(Rsender);
   }
 
  private:
