@@ -238,123 +238,146 @@ void setup_temperature_sensors() {
 
 void setup_coolant_sender() {
 
-  // ------------------------------------------------------------------------
-  // 1. Configure ADC1 channel attenuation (required for SensESP 3.1.1)
-  //    GPIO 39 → ADC1_CHANNEL_3
-  //    11 dB attenuation = ~3.2V full-scale input
-  // ------------------------------------------------------------------------
-  adc1_config_width(ADC_WIDTH_BIT_12);
-  adc1_config_channel_atten(ADC1_CHANNEL_3, ADC_ATTEN_DB_11);
-
-
-  // ------------------------------------------------------------------------
-  // 2. Raw ADC input (millivolts)
-  // ------------------------------------------------------------------------
+  //
+  // STEP 1 — Raw ADC input (FireBeetle ESP32-E returns MICROVOLTS)
+  //
   auto* adc_raw = new AnalogInput(
       PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
       "/config/sensors/coolant/adc_raw"
   );
 
-  adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_millivolts"));
-
-
-  // ------------------------------------------------------------------------
-  // 3. Convert mV → volts
-  // ------------------------------------------------------------------------
- auto* volts_raw = adc_raw->connect_to(
-      new Linear(0.000001f, 0.0f, "/config/sensors/coolant/volts_raw")  // output is in micro volts
-);
-
-  volts_raw->connect_to(new SKOutputFloat("debug.coolant.volts_raw"));
-
-
-  // ------------------------------------------------------------------------
-  // 4. Apply ADC calibration factor
-  //    Measured: 1.36V actual → 1.624V reported
-  //    Correction factor = 1.36 / 1.624 = 0.8374
-  // ------------------------------------------------------------------------
-  static const float ADC_CORR = 0.8374f;
-
-  auto* volts_cal = volts_raw->connect_to(
-      new Linear(ADC_CORR, 0.0f, "/config/sensors/coolant/volts_calibrated")
+  // Convert µV → V
+  auto* volts_raw = adc_raw->connect_to(
+      new Linear(
+          0.000001f,       // MICROVOLTS → VOLTS
+          0.0f,
+          "/config/sensors/coolant/volts_raw"
+      )
   );
 
-  volts_cal->connect_to(new SKOutputFloat("debug.coolant.volts_calibrated"));
-
-
-  // ------------------------------------------------------------------------
-  // 5. Undo the SEN003 divider ×5
-  // ------------------------------------------------------------------------
-  auto* volts_sender = volts_cal->connect_to(
-      new Linear(COOLANT_DIVIDER_GAIN, 0.0f,
-                 "/config/sensors/coolant/sender_voltage")
+  //
+  // STEP 2 — Calibration for FireBeetle's non-linear ADC
+  // Your measured slope correction = 0.8374
+  //
+  auto* volts_calibrated = volts_raw->connect_to(
+      new Linear(
+          0.8374f,         // ADC correction factor
+          0.0f,
+          "/config/sensors/coolant/volts_calibrated"
+      )
   );
 
-  volts_sender->connect_to(new SKOutputFloat("debug.coolant.senderVoltage"));
-
-
-  // ------------------------------------------------------------------------
-  // 6. Smooth the sender voltage
-  // ------------------------------------------------------------------------
-  auto* volts_smooth = volts_sender->connect_to(
-      new Median(5, "/config/sensors/coolant/sender_voltage_smooth")
+  //
+  // STEP 3 — Undo divider (DFRobot SEN0003 is EXACT 1:5)
+  //
+  auto* sender_voltage = volts_calibrated->connect_to(
+      new Linear(
+          COOLANT_DIVIDER_GAIN,    // = 5.0
+          0.0f,
+          "/config/sensors/coolant/sender_voltage"
+      )
   );
 
-  volts_smooth->connect_to(
-      new SKOutputFloat("debug.coolant.senderVoltage_smooth"));
-
-
-  // ------------------------------------------------------------------------
-  // 7. Convert sender voltage → sender resistance using your rewritten class
-  // ------------------------------------------------------------------------
-  auto* sender_res = volts_smooth->connect_to(
-      new SenderResistance(COOLANT_SUPPLY_VOLTAGE, COOLANT_GAUGE_RESISTOR)
+  //
+  // STEP 4 — Smooth the sender voltage to prevent jitter
+  //
+  auto* sender_voltage_smooth = sender_voltage->connect_to(
+      new Median(
+          5,                          // 5-sample median
+          "/config/sensors/coolant/sender_voltage_smooth"
+      )
   );
 
-  sender_res->connect_to(new SKOutputFloat("debug.coolant.senderResistance"));
+  //
+  // STEP 5 — Convert sender voltage → sender resistance
+  //
+  auto* sender_res_raw = sender_voltage_smooth->connect_to(
+      new SenderResistance(
+          COOLANT_SUPPLY_VOLTAGE,     // 12.0 V
+          COOLANT_GAUGE_RESISTOR      // 1035 Ω
+      )
+  );
 
+  //
+  // STEP 6 — USER CALIBRATION FACTOR
+  // Allows trimming the entire curve by scaling the sender resistance
+  //
+  auto* sender_res_scaled = sender_res_raw->connect_to(
+      new Linear(
+          1.0f,                        // USER-ADJUSTABLE SCALE FACTOR
+          0.0f,
+          "/config/sensors/coolant/resistance_scale"
+      )
+  );
 
-  // ------------------------------------------------------------------------
-  // 8. Map resistance → °C using your Yanmar temperature curve
-  // ------------------------------------------------------------------------
+//
+// CONFIG ITEM — Allow user to adjust sender curve linearity (scale factor)
+//
+ConfigItem(sender_res_scaled)
+    ->set_title("Engine Coolant Sender Curve Linearity")
+    ->set_description("Scale factor applied to coolant sender resistance, adjust to match actual temperature")
+    ->set_sort_order(350);
+
+  //
+  // STEP 7 — Sender resistance → Temperature (°C)
+  // Uses your American sender calibration curve
+  //
   std::set<CurveInterpolator::Sample> ohms_to_temp = {
-      { 29.6f, 121.0f },
-      { 45.0f, 100.0f },
-      { 85.5f,  85.0f },
-      { 90.9f,  82.5f },
-      { 97.0f,  80.0f },
-      { 104.0f, 76.7f },
-      { 112.0f, 72.0f },
-      { 131.0f, 63.9f },
-      { 207.0f, 56.0f },
-      { 1352.0f, 12.7f }
+      {29.6f, 121.0f},
+      {45.0f, 100.0f},
+      {85.5f, 85.0f},
+      {90.9f, 82.5f},
+      {97.0f, 80.0f},
+      {104.0f, 76.7f},
+      {112.0f, 72.0f},
+      {131.0f, 63.9f},
+      {207.0f, 56.0f},
+      {1352.0f, 12.7f}
   };
 
-  auto* tempC = sender_res->connect_to(
-      new CurveInterpolator(&ohms_to_temp,
-            "/config/sensors/coolant/temp_curve")
+  auto* temp_C = sender_res_scaled->connect_to(
+      new CurveInterpolator(
+          &ohms_to_temp,
+          "/config/sensors/coolant/temp_C"
+      )
   );
 
-  tempC->connect_to(new SKOutputFloat("debug.coolant.temperatureC"));
+  //
+  // STEP 8 — Convert °C → Kelvin for Signal K compliance
+  //
+  auto* temp_K = temp_C->connect_to(
+      new Linear(
+          1.0f,
+          273.15f,
+          "/config/sensors/coolant/temp_K"
+      )
+  );
 
-
-  // ------------------------------------------------------------------------
-  // 9. Signal K output
-  // ------------------------------------------------------------------------
+  //
+  // STEP 9 — Publish to Signal K
+  //
   auto* sk_coolant = new SKOutputFloat(
       "propulsion.mainEngine.coolantTemperature",
       "/config/outputs/sk/coolant_temp"
   );
 
-auto* tempK = tempC->connect_to(
-    new Linear(1.0f, 273.15f, "/config/sensors/coolant/temp_kelvin")
-);
+  temp_K->connect_to(sk_coolant);
 
-tempK->connect_to(sk_coolant);
-
-
+  //
+  // STEP 10 — DEBUG OUTPUTS (VERY USEFUL)
+  //
+  adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_millivolts"));  // actually µV
+  volts_raw->connect_to(new SKOutputFloat("debug.coolant.volts_raw"));
+  volts_calibrated->connect_to(new SKOutputFloat("debug.coolant.volts_calibrated"));
+  sender_voltage->connect_to(new SKOutputFloat("debug.coolant.senderVoltage"));
+  sender_voltage_smooth->connect_to(new SKOutputFloat("debug.coolant.senderVoltage_smooth"));
+  sender_res_raw->connect_to(new SKOutputFloat("debug.coolant.senderResistance"));
+  sender_res_scaled->connect_to(new SKOutputFloat("debug.coolant.senderResistance_scaled"));
+  temp_C->connect_to(new SKOutputFloat("debug.coolant.temperatureC"));
+  temp_K->connect_to(new SKOutputFloat("debug.coolant.temperatureK"));
 }
+
 
 
 
