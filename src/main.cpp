@@ -2,14 +2,18 @@
 // Yanmar Diesel Engine Monitoring - SensESP v3.1.1
 // ============================================================================
 // Features:
-//  - Coolant sender via ADC (FireBeetle calibrated)
+//  - Engine Coolant sender via ADC (FireBeetle calibrated) (works in conjuction with gauge)
 //  - 3x OneWire temperature sensors
 //  - RPM via magnetic pickup
-//  - Fuel flow estimation
+//  - Fuel flow estimation based on RPM
 //  - Engine hours accumulator
 //  - SK debug output
 //  - OTA update
+//  - Full UI configuration for SK paths and calibration, setting wifi and SK server address
 // values sent to SignalK IAW https://signalk.org/specification/1.5.0/doc/vesselsBranch.html
+//  Note: you need a signalk server and ideally a wifi router (although CerboGX can act
+//  as AP).
+//  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired.)
 // ============================================================================
 // ============================================================================
 
