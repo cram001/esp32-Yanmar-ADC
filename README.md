@@ -25,11 +25,25 @@ Required hardware:
 - Buck voltage converter, stable 5V output (DF Robot DFR1015)
 - OneWIre temp sensor (waterproof) with resistor module (DF Robot KIT0021)
 -   Note: you can use one resistor module per sensor, or connect multiple sensors in parallel to one resistor module. Code is currently written for 1 pin per OneWire sensor
-- Voltage Divier: to connect your engine's coolant temp sender without affecting the gauge. NOTE: you must select a voltage divider that will result in max 3.3V to the ESP32
--   NO MATTER WHAT HAPPENS ,including a wire short. ex: 22V / 5 = 4.4 V: would damage the ESP32. DFR0051 will work up to about 15 volts
--   suggest sampling the coolant temp gauge voltage (sender pin to ground pin) at various temperatures to confirm your boat's voltage for the coolant temp sender...
+- Voltage Divider: to connect your engine's coolant temp sender without affecting the gauge. 
+-   CRITICAL: FireBeetle ESP32-E ADC uses 2.5V reference (NOT 3.3V). 
+-   DFR0051 (30kΩ/7.5kΩ = 5:1 ratio) voltage analysis for 14.0V max system:
+-     • Normal operation: 0.30V - 1.49V ✅ SAFE
+-     • Open circuit fault: 2.8V (exceeds 2.45V recommended spec, but below 3.6V damage threshold)
+-   RISK: Operating above 2.5V reduces ADC accuracy and lifespan, vulnerable to voltage spikes
+-   RECOMMENDED: Add 2.4V Zener diode protection to ADC input (~$0.50 part) for hardware safety
+-   Software protection: Code detects open circuit and emits NAN (see sender_resistance.h)
+-   Suggest sampling the coolant temp gauge voltage (sender pin to ground pin) at various temperatures to confirm your boat's voltage for the coolant temp sender...
 - To connect the mageteic pickup RPM sender to the ESP32, you will need an Op-Amp (LMV358), Opto Isolator and Capacitor 50V, 0.1uF
 - Other misc parts: project box, interconnect wires, etc..
+
+Memory Optimization:
+
+The code includes conditional compilation flags to reduce flash usage:
+- `ENABLE_DEBUG_OUTPUTS=0` in platformio.ini disables all debug.* SignalK paths (saves ~5-10KB flash)
+- `RPM_SIMULATOR=0` disables the RPM simulator (saves ~2KB flash)
+- For 4MB units at 92% capacity: disable debug outputs and OTA to free up space
+- To disable OTA: comment out `.enable_ota()` in setup() and use different partition table
 
 Future upgrades:
 

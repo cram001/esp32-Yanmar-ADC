@@ -79,7 +79,7 @@ void setupRPMSimulator() {
     timerAlarmEnable(sim_timer);
 
     Serial.println("=== RPM SIMULATOR ACTIVE ===");
-    Serial.println("Simulator pin: GPIO27  →  RPM input pin: GPIO25");
+    Serial.println("Simulator pin: GPIO26  →  RPM input pin: GPIO25");
 }
 
 

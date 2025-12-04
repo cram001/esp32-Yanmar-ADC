@@ -79,6 +79,15 @@ static const float ADC_SAMPLE_RATE_HZ = 10.0f;
 
 // DFROBOT Gravity Voltage Divider (SEN0003 / DFR0051)
 // R1 = 30kΩ, R2 = 7.5kΩ → divider ratio = 1/5 → gain = 5.0
+// 
+// ⚠️ VOLTAGE ANALYSIS (14.0V max system):
+// - Normal operation (29-1352Ω sender): 0.30V - 1.49V ✅ SAFE
+// - Open circuit fault (14.0V): 2.8V → EXCEEDS recommended 2.45V spec
+// - ESP32 absolute max: 3.6V (won't damage, but out of spec)
+// - RISK: Reduced accuracy/lifespan when >2.5V, vulnerable to voltage spikes
+// - RECOMMENDED: Add 2.4V Zener diode for hardware protection (~$0.50)
+// - Software protection: sender_resistance.h detects open circuit and emits NAN
+//
 static const float DIV_R1 = 30000.0f;     // Top resistor
 static const float DIV_R2 = 7500.0f;      // Bottom resistor
 static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;  
@@ -380,8 +389,9 @@ auto* temp_C_avg = temp_C->connect_to(
   );
 
   //
-  // STEP 11 — DEBUG OUTPUTS
+  // STEP 11 — DEBUG OUTPUTS (conditional compilation)
   //
+#if ENABLE_DEBUG_OUTPUTS
   adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_volts"));
   volts_raw->connect_to(new SKOutputFloat("debug.coolant.volts_raw"));
   sender_voltage->connect_to(new SKOutputFloat("debug.coolant.senderVoltage"));
@@ -390,6 +400,7 @@ auto* temp_C_avg = temp_C->connect_to(
   sender_res_scaled->connect_to(new SKOutputFloat("debug.coolant.senderResistance_scaled"));
   temp_C->connect_to(new SKOutputFloat("debug.coolant.temperatureC_raw"));
   temp_C_avg->connect_to(new SKOutputFloat("debug.coolant.temperatureC_avg"));
+#endif
 }
 
 
@@ -444,8 +455,9 @@ auto* pulse_input = new DigitalInputCounter(
   rpm_output->connect_to(sk_rpm);
 
   //
-  // 5. Debug Outputs
+  // 5. Debug Outputs (conditional compilation)
   //
+#if ENABLE_DEBUG_OUTPUTS
   rpm_output->connect_to(
       new SKOutputFloat("debug.rpm_readable")
   );
@@ -453,6 +465,7 @@ auto* pulse_input = new DigitalInputCounter(
   g_frequency->connect_to(
       new SKOutputFloat("debug.rpm_hz")
   );
+#endif
 
   //
   // 6. Config UI
@@ -482,11 +495,13 @@ void setup_fuel_flow() {
       })
   );
 
-  // Debug readable RPM
+  // Debug readable RPM (conditional compilation)
+#if ENABLE_DEBUG_OUTPUTS
   rpm_input->connect_to(new SKOutputFloat(
       "debug.rpm_readable",
       "/config/outputs/sk/debug_rpm_readable"
   ));
+#endif
 
   // -------------------------
   // 2) RPM → Liters per hour curve
@@ -497,7 +512,8 @@ void setup_fuel_flow() {
       {1500, 1.8},
       {2000, 2.3},
       {2800, 2.7},
-      {3600, 3.4},
+      {3200, 3.4},
+      {3900, 6.5},
   };
 
   auto* fuel_lph = rpm_input->connect_to(
@@ -506,12 +522,14 @@ void setup_fuel_flow() {
   );
 
   
+#if ENABLE_DEBUG_OUTPUTS
   fuel_lph->connect_to(new SKOutputFloat(
       "debug.fuel.lph",
       "/config/outputs/sk/debug_fuel_lph"
   ));
+#endif
 
-g_fuel_lph = fuel_lph;   // expose to engine_load module
+  g_fuel_lph = fuel_lph;   // expose to engine_load module
 
 
   // -------------------------
@@ -541,12 +559,13 @@ g_fuel_lph = fuel_lph;   // expose to engine_load module
       "/config/outputs/sk/fuel_rate_m3s"
   ));
 
-  // Debug m³/s output
+  // Debug m³/s output (conditional compilation)
+#if ENABLE_DEBUG_OUTPUTS
   fuel_m3s->connect_to(new SKOutputFloat(
       "debug.fuel.m3s",
       "/config/outputs/sk/debug_fuel_m3s"
   ));
-  g_fuel_lph = fuel_lph;  // expose for engine load calc
+#endif
 
 }
 
@@ -585,8 +604,10 @@ void setup_engine_hours() {
   // Output to SK in seconds
   hours_to_seconds->connect_to(sk_hours);
 
-  // Debug (still outputs hours)
+  // Debug (still outputs hours) - conditional compilation
+#if ENABLE_DEBUG_OUTPUTS
   hours->connect_to(new SKOutputFloat("debug.engineHours"));
+#endif
 
   // UI configuration remains in HOURS
   ConfigItem(hours)

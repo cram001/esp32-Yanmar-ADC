@@ -115,6 +115,8 @@ inline void setup_engine_load(
                           "/config/outputs/sk/engine_load")
     );
 
+    // Debug outputs (conditional compilation)
+#if ENABLE_DEBUG_OUTPUTS
     // Actual delivered power
     actual_power_kW->connect_to(
         new SKOutputFloat("debug.engine.power_kW")
@@ -124,4 +126,5 @@ inline void setup_engine_load(
     max_power_interp->connect_to(
         new SKOutputFloat("debug.engine.maxPower_kW")
     );
+#endif
 }
