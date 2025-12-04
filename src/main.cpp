@@ -37,11 +37,14 @@
 #include "sensesp/transforms/median.h"
 #include "sensesp/transforms/frequency.h"
 #include "sensesp/transforms/curveinterpolator.h"
+#include "sensesp/transforms/moving_average.h"
+
 
 // Custom transforms
 #include "sender_resistance.h"
 #include "engine_hours.h"
 #include "engine_load.h"
+#include "calibrated_analog_input.h"
 
 #ifdef RPM_SIMULATOR
 #include "rpm_simulator.h"
@@ -81,8 +84,9 @@ static const float DIV_R2 = 7500.0f;      // Bottom resistor
 static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;  
 // COOLANT_DIVIDER_GAIN = 5.0
 
-static const float COOLANT_SUPPLY_VOLTAGE = 12.0f;
-static const float COOLANT_GAUGE_RESISTOR = 1035.0f;
+static const float COOLANT_SUPPLY_VOLTAGE = 13.5f;  //13.5 volt nominal, indication will be close enough at 12-14 VDC
+static const float COOLANT_GAUGE_RESISTOR = 1180.0f;   // Derived from 6.8V @ 1352Ω coolant temp gauge resistance
+// recheck this at operating temperature
 
 
 static const float RPM_TEETH = 116.0f;
@@ -245,7 +249,7 @@ void setup_temperature_sensors() {
 // COOLANT SENDER — FireBeetle ESP32-E (SensESP v3.1.1 compatible)
 // ============================================================================
 // Features:
-//  * Correct ADC attenuation (DB_11 for 3.2V max range)
+//  * Correct ADC attenuation (DB_11 for 2.5V max range)
 //  * Voltage divider compensation ×5 (DFRobot SEN003)
 //  * ADC calibration factor applied once (board-specific)
 //  * Safe median filtering
@@ -254,105 +258,89 @@ void setup_temperature_sensors() {
 //  * Full debug chain
 // ============================================================================
 
-
 void setup_coolant_sender() {
 
   //
-  // STEP 1 — Raw ADC input (FireBeetle ESP32-E returns MICROVOLTS)
+  // STEP 1 — Calibrated ADC input (FireBeetle ESP32-E, 2.5 V reference)
   //
-  auto* adc_raw = new AnalogInput(
+  auto* adc_raw = new CalibratedAnalogInput(
       PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
       "/config/sensors/coolant/adc_raw"
   );
 
-  // Convert µV → V
+  //
+  // STEP 2 — Direct volts (Linear(1.0f) preserved for UI fine tuning)
+  //
   auto* volts_raw = adc_raw->connect_to(
       new Linear(
-          0.000001f,       // MICROVOLTS → VOLTS
+          1.0f,
           0.0f,
           "/config/sensors/coolant/volts_raw"
       )
   );
 
   //
-  // STEP 2 — Calibration for FireBeetle's non-linear ADC
-  // Your measured slope correction = 0.8374
+  // STEP 3 — Undo DFRobot 30k / 7.5k divider (exact 5.0x multiplier)
   //
-  auto* volts_calibrated = volts_raw->connect_to(
+  auto* sender_voltage = volts_raw->connect_to(
       new Linear(
-          0.8374f,         // ADC correction factor
-          0.0f,
-          "/config/sensors/coolant/volts_calibrated"
-      )
-  );
-
-  //
-  // STEP 3 — Undo divider (DFRobot SEN0003 is EXACT 1:5)
-  //
-  auto* sender_voltage = volts_calibrated->connect_to(
-      new Linear(
-          COOLANT_DIVIDER_GAIN,    // = 5.0
+          COOLANT_DIVIDER_GAIN,     // = 5.0
           0.0f,
           "/config/sensors/coolant/sender_voltage"
       )
   );
 
   //
-  // STEP 4 — Smooth the sender voltage to prevent jitter
+  // STEP 4 — Median filtering to reject ADC spike noise
   //
   auto* sender_voltage_smooth = sender_voltage->connect_to(
       new Median(
-          5,                          // 5-sample median
+          5,
           "/config/sensors/coolant/sender_voltage_smooth"
       )
   );
 
   //
-  // STEP 5 — Convert sender voltage → sender resistance
+  // STEP 5 — Convert voltage → sender resistance
   //
   auto* sender_res_raw = sender_voltage_smooth->connect_to(
       new SenderResistance(
-          COOLANT_SUPPLY_VOLTAGE,     // 12.0 V
-          COOLANT_GAUGE_RESISTOR      // 1035 Ω
+          COOLANT_SUPPLY_VOLTAGE,    // set nominal 13.5 V
+          COOLANT_GAUGE_RESISTOR     // ≈ 1035 Ω
       )
   );
 
   //
-  // STEP 6 — USER CALIBRATION FACTOR
-  // Allows trimming the entire curve by scaling the sender resistance
+  // STEP 6 — User scaling (fine tuning)
   //
   auto* sender_res_scaled = sender_res_raw->connect_to(
       new Linear(
-          1.0f,                        // USER-ADJUSTABLE SCALE FACTOR
+          1.0f,
           0.0f,
           "/config/sensors/coolant/resistance_scale"
       )
   );
 
-//
-// CONFIG ITEM — Allow user to adjust sender curve linearity (scale factor)
-//
-ConfigItem(sender_res_scaled)
-    ->set_title("Engine Coolant Sender Curve Linearity")
-    ->set_description("Scale factor applied to coolant sender resistance, adjust to match actual temperature")
-    ->set_sort_order(350);
+  ConfigItem(sender_res_scaled)
+      ->set_title("Engine Coolant Sender Curve Linearity")
+      ->set_description("Scale factor applied to sender resistance")
+      ->set_sort_order(350);
 
   //
-  // STEP 7 — Sender resistance → Temperature (°C)
-  // Uses your American sender calibration curve
+  // STEP 7 — Convert sender resistance → coolant temp (°C)
   //
   std::set<CurveInterpolator::Sample> ohms_to_temp = {
       {29.6f, 121.0f},
       {45.0f, 100.0f},
-      {85.5f, 85.0f},
-      {90.9f, 82.5f},
-      {97.0f, 80.0f},
+      {85.5f,  85.0f},
+      {90.9f,  82.5f},
+      {97.0f,  80.0f},
       {104.0f, 76.7f},
       {112.0f, 72.0f},
       {131.0f, 63.9f},
       {207.0f, 56.0f},
-      {1352.0f, 12.7f}
+      {1352.0f,12.7f}
   };
 
   auto* temp_C = sender_res_scaled->connect_to(
@@ -363,91 +351,118 @@ ConfigItem(sender_res_scaled)
   );
 
   //
-  // STEP 8 — Convert °C → Kelvin for Signal K compliance
+  // STEP 8 — 5 second moving average (50 samples @ 10 Hz)
   //
-  auto* temp_K = temp_C->connect_to(
-      new Linear(
-          1.0f,
-          273.15f,
-          "/config/sensors/coolant/temp_K"
-      )
-  );
+auto* temp_C_avg = temp_C->connect_to(
+    new MovingAverage(50)   // 5 seconds @ 10Hz
+);
 
   //
-  // STEP 9 — Publish to Signal K
+  // STEP 9 — Prepare SK output (manually updated every 10 sec)
   //
   auto* sk_coolant = new SKOutputFloat(
       "propulsion.mainEngine.coolantTemperature",
       "/config/outputs/sk/coolant_temp"
   );
 
-  temp_K->connect_to(sk_coolant);
+  //
+  // STEP 10 — Throttle SK output: update every 10 seconds
+  //
+  sensesp_app->get_event_loop()->onRepeat(
+      10000,   // milliseconds
+      [temp_C_avg, sk_coolant]() {
+        
+        float c = temp_C_avg->get();
+        if (!isnan(c)) {
+          sk_coolant->set_input(c + 273.15f);   // convert °C → K
+        }
+      }
+  );
 
   //
-  // STEP 10 — DEBUG OUTPUTS (VERY USEFUL)
+  // STEP 11 — DEBUG OUTPUTS
   //
-  adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_millivolts"));  // actually µV
+  adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_volts"));
   volts_raw->connect_to(new SKOutputFloat("debug.coolant.volts_raw"));
-  volts_calibrated->connect_to(new SKOutputFloat("debug.coolant.volts_calibrated"));
   sender_voltage->connect_to(new SKOutputFloat("debug.coolant.senderVoltage"));
   sender_voltage_smooth->connect_to(new SKOutputFloat("debug.coolant.senderVoltage_smooth"));
   sender_res_raw->connect_to(new SKOutputFloat("debug.coolant.senderResistance"));
   sender_res_scaled->connect_to(new SKOutputFloat("debug.coolant.senderResistance_scaled"));
-  temp_C->connect_to(new SKOutputFloat("debug.coolant.temperatureC"));
-  temp_K->connect_to(new SKOutputFloat("debug.coolant.temperatureK"));
+  temp_C->connect_to(new SKOutputFloat("debug.coolant.temperatureC_raw"));
+  temp_C_avg->connect_to(new SKOutputFloat("debug.coolant.temperatureC_avg"));
 }
-
-
 
 
 // ============================================================================
 // RPM SENSOR — UI + EDITABLE SK PATH
 // ============================================================================
+
 void setup_rpm_sensor() {
 
-auto* rpm_input =
-    new DigitalInputCounter(PIN_RPM, INPUT, CHANGE, 0);
+  //
+  // 1. Pulse counter (interrupt-driven)
+  //
+auto* pulse_input = new DigitalInputCounter(
+      PIN_RPM,
+      INPUT,
+      CHANGE,
+      0      // reset interval
+);
 
+  //
+  // 2. Frequency transform: pulses/sec → revolutions/sec
+  //
+  // multiplier = 1 / number_of_teeth
+  //
+  g_frequency = pulse_input->connect_to(
+      new Frequency(
+          1.0f / RPM_TEETH,
+          "/config/sensors/rpm/frequency"
+      )
+  );
 
-  g_frequency = new Frequency(RPM_MULTIPLIER,
-                              "/config/sensors/rpm/frequency");
+  //
+  // 3. Convert revolutions/sec → RPM
+  //
+  auto* rpm_output = g_frequency->connect_to(
+      new LambdaTransform<float, float>(
+          [](float rev_per_sec) {
+            return rev_per_sec * 60.0f;  // Hz → RPM
+          },
+          "/config/sensors/rpm/rpm_value"
+      )
+  );
 
+  //
+  // 4. Publish RPM to Signal K
+  //
   auto* sk_rpm = new SKOutputFloat(
       "propulsion.mainEngine.revolutions",
       "/config/outputs/sk/rpm"
   );
 
-  rpm_input->connect_to(g_frequency)->connect_to(sk_rpm);
+  rpm_output->connect_to(sk_rpm);
 
- 
+  //
+  // 5. Debug Outputs
+  //
+  rpm_output->connect_to(
+      new SKOutputFloat("debug.rpm_readable")
+  );
+
+  g_frequency->connect_to(
+      new SKOutputFloat("debug.rpm_hz")
+  );
+
+  //
+  // 6. Config UI
+  //
   ConfigItem(sk_rpm)
       ->set_title("RPM SK Path")
       ->set_description("Signal K path for engine RPM")
       ->set_sort_order(500);
-
-  g_frequency->connect_to(new SKOutputFloat("debug.rpm"));
-
-// A readable RPM signal for engine load calculations
-auto* rpm_rpm = g_frequency->connect_to(
-    new LambdaTransform<float, float>([](float hz) {
-        return hz * 60.0f;   // Hz → RPM
-    })
-);
-
-
-// Debug output in actual RPM
-auto* rpm_debug = g_frequency->connect_to(
-    new LambdaTransform<float, float>([](float hz) {
-        return hz * 60.0f;   // Convert revolutions/second → RPM
-    })
-);
-
-rpm_debug->connect_to(
-    new SKOutputFloat("debug.rpm_readable")   // new debug path
-);
-
-
 }
+
 
 // ============================================================================
 // FUEL FLOW — UI + EDITABLE SK PATH  engine RPM to LPH curve
