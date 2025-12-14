@@ -15,7 +15,7 @@ static const int COOLANT_ADC_PIN = 39;   // Your existing coolant ADC pin (for r
 // ---------------------------
 static const float TEMP_MIN_C = 12.0f;
 static const float TEMP_MAX_C = 95.0f;
-static const uint32_t SWEEP_TIME_MS = 30000; // 30s sweep
+static const uint32_t COOLANT_SWEEP_TIME_MS = 30000; // 30s sweep
 
 static float g_sim_temp_c = TEMP_MIN_C;
 
@@ -97,12 +97,12 @@ static void update_coolant_sim() {
   if (start_ms == 0) start_ms = now;
 
   uint32_t elapsed = now - start_ms;
-  if (elapsed > SWEEP_TIME_MS) {
+  if (elapsed > COOLANT_SWEEP_TIME_MS) {
     start_ms = now;
     elapsed = 0;
   }
 
-  float ratio = (float)elapsed / (float)SWEEP_TIME_MS;
+  float ratio = (float)elapsed / (float)COOLANT_SWEEP_TIME_MS;
   g_sim_temp_c = TEMP_MIN_C + ratio * (TEMP_MAX_C - TEMP_MIN_C);
 
   float v_adc = adc_volts_for_temp(g_sim_temp_c);
