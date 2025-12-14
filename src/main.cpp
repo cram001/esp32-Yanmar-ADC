@@ -50,6 +50,14 @@
 #include "rpm_simulator.h"
 #endif
 
+#if COOLANT_SIMULATOR
+#include "coolant_simulator.h"
+#endif
+
+#if (RPM_SIMULATOR && COOLANT_SIMULATOR)
+#error "Enable only one simulator at a time (both want GPIO26)."
+#endif
+
 using namespace sensesp;
 using namespace sensesp::onewire;
 
@@ -65,9 +73,9 @@ void setup_engine_hours();
 // -----------------------------------------------
 // PIN DEFINITIONS — FIREBEETLE ESP32-E
 // -----------------------------------------------
-static const uint8_t PIN_TEMP_COMPARTMENT = 4;  // one wire for engine compartment
-static const uint8_t PIN_TEMP_EXHAUST     = 16;  // one wire,strapped to exhaust elbow
-static const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin??
+static const uint8_t PIN_TEMP_COMPARTMENT = 4;  // one wire for engine compartment /digital  12
+static const uint8_t PIN_TEMP_EXHAUST     = 16;  // one wire,strapped to exhaust elbow digital 11
+static const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin?? / digital 10 NOT USED
 
 static const uint8_t PIN_ADC_COOLANT      = 39;  // engine's coolant temperature sender
 static const uint8_t PIN_RPM              = 25;
@@ -116,6 +124,11 @@ void setup() {
 #ifdef RPM_SIMULATOR
   Serial.println("RPM SIMULATOR ACTIVE");
   setupRPMSimulator();
+#endif
+
+#if COOLANT_SIMULATOR
+  Serial.println("COOLANT SIMULATOR ACTIVE");
+  setupCoolantSimulator();
 #endif
 
   SetupLogging();
@@ -639,6 +652,11 @@ void loop() {
 #ifdef RPM_SIMULATOR
     loopRPMSimulator();
 #endif
+
+#if COOLANT_SIMULATOR
+  loopCoolantSimulator();
+#endif
+
 }
 
 
