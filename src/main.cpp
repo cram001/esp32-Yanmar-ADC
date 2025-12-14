@@ -16,6 +16,7 @@
 //  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired.)
 // ============================================================================
 // ============================================================================
+#ifndef UNIT_TEST
 
 #include <memory>
 
@@ -57,6 +58,8 @@
 #if (RPM_SIMULATOR && COOLANT_SIMULATOR)
 #error "Enable only one simulator at a time (both want GPIO26)."
 #endif
+
+
 
 using namespace sensesp;
 using namespace sensesp::onewire;
@@ -658,5 +661,5 @@ void loop() {
 #endif
 
 }
-
+#endif  // UNIT_TEST
 
