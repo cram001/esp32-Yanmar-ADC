@@ -14,6 +14,17 @@
 //  Note: you need a signalk server and ideally a wifi router (although CerboGX can act
 //  as AP).
 //  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired.)
+// oil pressure sender sierra OP24301 Range-1 Gauge: 240 Ohms at 0 PSI
+//Range-1 Gauge: 200 Ohms at 10 PSI
+//Range-1 Gauge: 160 Ohms at 20 PSI
+//Range-1 Gauge: 140 Ohms at 30 PSI
+//Range-1 Gauge: 120 Ohms at 40 PSI
+//Range-1 Gauge: 100 Ohms at 50 PSI
+//Range-1 Gauge: 90 Ohms at 60 PSI
+//Range-1 Gauge: 75 Ohms at 70 PSI
+//Range-1 Gauge: 60 Ohms at 80 PSI
+//Range-1 Gauge: 45 Ohms at 90 PSI
+//Range-1 Gauge: 33 Ohms at 100 PSI
 // ============================================================================
 // ============================================================================
 #ifndef UNIT_TEST
@@ -41,12 +52,15 @@
 #include "sensesp/transforms/moving_average.h"
 
 
-// Custom transforms
+// Custom functions
 #include "sender_resistance.h"
 #include "engine_hours.h"
 #include "engine_load.h"
 #include "calibrated_analog_input.h"
+#include "oil_pressure_sender.h"
 
+
+// Simulator/test options
 #ifdef RPM_SIMULATOR
 #include "rpm_simulator.h"
 #endif
@@ -59,8 +73,7 @@
 #error "Enable only one simulator at a time (both want GPIO26)."
 #endif
 
-
-
+// Global SensESP app pointer
 using namespace sensesp;
 using namespace sensesp::onewire;
 
@@ -74,20 +87,26 @@ void setup_fuel_flow();
 void setup_engine_hours();
 
 // -----------------------------------------------
-// PIN DEFINITIONS — FIREBEETLE ESP32-E
+// PIN DEFINITIONS — FIREBEETLE ESP32-E   EDIT THESE IF REQUIRE FOR YOUR BOARD
 // -----------------------------------------------
 static const uint8_t PIN_TEMP_COMPARTMENT = 4;  // one wire for engine compartment /digital  12
 static const uint8_t PIN_TEMP_EXHAUST     = 16;  // one wire,strapped to exhaust elbow digital 11
 static const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin?? / digital 10 NOT USED
 
 static const uint8_t PIN_ADC_COOLANT      = 39;  // engine's coolant temperature sender
-static const uint8_t PIN_RPM              = 25;
+static const uint8_t PIN_RPM              = 25;   // magnetic pickup for RPM (digital input) digital 2
+
+static const uint8_t PIN_ADC_OIL_PRESSURE = 36;   // choose free ADC pin
+static const float OIL_ADC_REF_VOLTAGE = 2.5f;    // ref voltage of the Firebeetle esp32-e
+static const float OIL_PULLUP_RESISTOR = 220.0f;   // Resistance (ohm) in mid-range of oil px sender values
+
 
 // -----------------------------------------------
 // CONSTANTS
 // -----------------------------------------------
 static const float ADC_SAMPLE_RATE_HZ = 10.0f;
 
+// FOR Yanmar COOLANT TEMP SENDER:
 // DFROBOT Gravity Voltage Divider (SEN0003 / DFR0051)
 // R1 = 30kΩ, R2 = 7.5kΩ → divider ratio = 1/5 → gain = 5.0
 // 
@@ -145,12 +164,22 @@ void setup() {
 
   sensesp_app = builder.get_app();
 
+new OilPressureSender(
+    PIN_ADC_OIL_PRESSURE,
+    OIL_ADC_REF_VOLTAGE,
+    OIL_PULLUP_RESISTOR,
+    ADC_SAMPLE_RATE_HZ,
+    "propulsion.mainEngine.oilPressure",
+    "/config/sensors/oil_pressure"
+);
+
   setup_temperature_sensors();
   setup_coolant_sender();
   setup_rpm_sensor();
   setup_fuel_flow();
   setup_engine_hours();
   setup_engine_load(g_frequency, g_fuel_lph);
+
 
 }
 
@@ -269,6 +298,9 @@ void setup_temperature_sensors() {
     ->set_description("Signal K path for alternator temperature")
     ->set_sort_order(302);
 }
+
+
+
 
 // ============================================================================
 // COOLANT SENDER — FireBeetle ESP32-E (SensESP v3.1.1 compatible)

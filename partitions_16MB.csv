@@ -1,0 +1,12 @@
+# Name,    Type, SubType, Offset,   Size
+
+# Data partitions (must end at 0x10000)
+nvs,       data, nvs,     0x9000,   0x5000
+otadata,   data, ota,     0xE000,   0x2000
+
+# Application partitions (64 KB aligned)
+app0,      app,  ota_0,   0x10000,  0x500000
+app1,      app,  ota_1,   0x510000, 0x500000
+
+# Filesystem
+spiffs,    data, spiffs,  0xA10000, 0x5F0000
