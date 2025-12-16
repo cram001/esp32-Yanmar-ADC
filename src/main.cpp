@@ -35,6 +35,9 @@
 #include "sensesp_app_builder.h"
 #include "sensesp/signalk/signalk_output.h"
 
+// wifi serial monitor
+#include "WebSerial.h"
+
 // Config UI elements
 #include "sensesp/ui/config_item.h"
 
@@ -505,7 +508,8 @@ auto* pulse_input = new DigitalInputCounter(
       "/config/outputs/sk/rpm"
   );
 
-  rpm_output->connect_to(sk_rpm);
+ // rpm_output->connect_to(sk_rpm);
+  g_frequency->connect_to(sk_rpm);
 
   //
   // 5. Debug Outputs (conditional compilation)
@@ -528,10 +532,10 @@ auto* pulse_input = new DigitalInputCounter(
       ->set_description("Signal K path for engine RPM")
       ->set_sort_order(500);
 
-  ConfigItem(RPM_TEETH)
-      ->set_title("RPM Teeth Count")
-      ->set_description("Number of teeth on the engine's tone wheel")
-      ->set_sort_order(501);
+  //ConfigItem(RPM_TEETH)
+   //   ->set_title("RPM Teeth Count")
+    //  ->set_description("Number of teeth on the engine's tone wheel")
+    //  ->set_sort_order(501);
 
 }
 
