@@ -160,7 +160,7 @@ void setup() {
   builder.set_hostname("esp32-yanmar")
       ->set_wifi_client("wifi_ssid", "wifi_passphrase")
       ->enable_ota("esp32!")
-      ->set_sk_server("192.168.150.95", 3000);
+      ->set_sk_server("192.168.88.99", 3000);
 
   sensesp_app = builder.get_app();
 
@@ -169,7 +169,7 @@ new OilPressureSender(
     OIL_ADC_REF_VOLTAGE,
     OIL_PULLUP_RESISTOR,
     ADC_SAMPLE_RATE_HZ,
-    "propulsion.mainEngine.oilPressure",
+    "propulsion.engine.oilPressure",
     "/config/sensors/oil_pressure"
 );
 
@@ -240,7 +240,7 @@ void setup_temperature_sensors() {
   );
 
   auto* sk_exhaust = new SKOutputFloat(
-      "propulsion.mainEngine.exhaustTemperature",
+      "propulsion.engine.exhaustTemperature",
       "/config/outputs/sk/exhaust_temp"
   );
 
@@ -418,15 +418,20 @@ auto* temp_C_avg = temp_C->connect_to(
   // STEP 9 — Prepare SK output (manually updated every 10 sec)
   //
   auto* sk_coolant = new SKOutputFloat(
-      "propulsion.mainEngine.coolantTemperature",
+      "propulsion.engine.Temperature",  //    "propulsion.engine.coolantTemperature" doesn't work, SK bug
       "/config/outputs/sk/coolant_temp"
   );
 
+  ConfigItem(sk_coolant)
+      ->set_title("Coolant Temp Sender SK Path")
+      ->set_description("Signal K path for engine Coolant Temp Sender")
+      ->set_sort_order(750);
+
   //
-  // STEP 10 — Throttle SK output: update every 10 seconds
+  // STEP 10 — Throttle SK output: update every 2 seconds
   //
   sensesp_app->get_event_loop()->onRepeat(
-      10000,   // milliseconds
+      2000,   // milliseconds
       [temp_C_avg, sk_coolant]() {
         
         float c = temp_C_avg->get();
@@ -496,7 +501,7 @@ auto* pulse_input = new DigitalInputCounter(
   // 4. Publish RPM to Signal K
   //
   auto* sk_rpm = new SKOutputFloat(
-      "propulsion.mainEngine.revolutions",
+      "propulsion.engine.revolutions",
       "/config/outputs/sk/rpm"
   );
 
@@ -522,6 +527,12 @@ auto* pulse_input = new DigitalInputCounter(
       ->set_title("RPM SK Path")
       ->set_description("Signal K path for engine RPM")
       ->set_sort_order(500);
+
+  ConfigItem(RPM_TEETH)
+      ->set_title("RPM Teeth Count")
+      ->set_description("Number of teeth on the engine's tone wheel")
+      ->set_sort_order(501);
+
 }
 
 
@@ -603,7 +614,7 @@ void setup_fuel_flow() {
   // 4) Output final fuel rate in m³/s → Signal K
   // -------------------------
   fuel_m3s->connect_to(new SKOutputFloat(
-      "propulsion.mainEngine.fuel.rate",
+      "propulsion.engine.fuel.rate",
       "/config/outputs/sk/fuel_rate_m3s"
   ));
 
@@ -642,7 +653,7 @@ void setup_engine_hours() {
 
   // Signal K output in SECONDS
   auto* sk_hours = new SKOutputFloat(
-      "propulsion.mainEngine.runTime",
+      "propulsion.engine.runTime",
       "/config/outputs/sk/engine_hours"
   );
 
@@ -666,7 +677,6 @@ void setup_engine_hours() {
       ->set_title("Engine Run Time SK Path")
       ->set_description("Signal K path for engine runtime (seconds)");
 }
-
 
 // ============================================================================
 // LOOP
