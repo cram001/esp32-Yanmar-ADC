@@ -36,7 +36,7 @@
 #include "sensesp/signalk/signalk_output.h"
 
 // wifi serial monitor
-#include "WebSerial.h"
+//#include "WebSerial.h"
 
 // Config UI elements
 #include "sensesp/ui/config_item.h"
@@ -421,7 +421,7 @@ auto* temp_C_avg = temp_C->connect_to(
   // STEP 9 — Prepare SK output (manually updated every 10 sec)
   //
   auto* sk_coolant = new SKOutputFloat(
-      "propulsion.engine.Temperature",  //    "propulsion.engine.coolantTemperature" doesn't work, SK bug
+      "propulsion.engine.temperature",  //    "propulsion.engine.coolantTemperature" doesn't work, SK bug
       "/config/outputs/sk/coolant_temp"
   );
 

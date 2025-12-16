@@ -111,7 +111,7 @@ inline void setup_engine_load(
 
     // Engine load (0–1)
     engine_load->connect_to(
-        new SKOutputFloat("propulsion.mainEngine.load",
+        new SKOutputFloat("propulsion.engine.load",
                           "/config/outputs/sk/engine_load")
     );
 
