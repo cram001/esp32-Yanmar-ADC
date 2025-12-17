@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cmath>
+
+#include <sensesp/system/valueproducer.h>
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
 #include <sensesp/signalk/signalk_output.h>
+#include <sensesp/transforms/frequency.h>
 
 using namespace sensesp;
 
@@ -79,7 +82,7 @@ static inline bool stw_invalid(float rpm, float stw) {
 static inline float wind_speed_factor(float aws_kn, float awa_rad) {
   if (std::isnan(aws_kn) || std::isnan(awa_rad)) return 0.0f;
 
-  float awa = std::fabs(awa_rad);           // radians
+  float awa = std::fabs(awa_rad);
   float cos_a = std::cos(awa);
   float sin_a = std::sin(awa);
 
@@ -88,7 +91,6 @@ static inline float wind_speed_factor(float aws_kn, float awa_rad) {
   float head = 0.0f;
   float cross = 0.0f;
 
-  // Head / tail wind component
   if (aws > 6.0f) {
     if (aws <= 15.0f)
       head = (aws - 6.0f) / 9.0f * 0.13f;
@@ -98,7 +100,6 @@ static inline float wind_speed_factor(float aws_kn, float awa_rad) {
       head = 0.20f + (aws - 20.0f) / 10.0f * 0.15f;
   }
 
-  // Crosswind component
   if (aws > 6.0f) {
     if (aws <= 15.0f)
       cross = (aws - 6.0f) / 9.0f * 0.08f;
@@ -108,7 +109,7 @@ static inline float wind_speed_factor(float aws_kn, float awa_rad) {
       cross = 0.10f + (aws - 20.0f) / 10.0f * 0.05f;
   }
 
-  float longitudinal = -head * cos_a;   // headwind reduces speed
+  float longitudinal = -head * cos_a;
   float lateral = -cross * sin_a;
 
   return longitudinal + lateral;
@@ -116,14 +117,14 @@ static inline float wind_speed_factor(float aws_kn, float awa_rad) {
 
 
 // ============================================================================
-// SETUP
+// SETUP — HEADER-ONLY (INLINE)
 // ============================================================================
 inline void setup_engine_performance(
   Frequency* rpm_source,
-  Transform<float, float>* stw_knots,
-  Transform<float, float>* sog_knots,
-  Transform<float, float>* aws_knots,
-  Transform<float, float>* awa_rad
+  ValueProducer<float>* stw_knots,
+  ValueProducer<float>* sog_knots,
+  ValueProducer<float>* aws_knots,
+  ValueProducer<float>* awa_rad
 ) {
   auto* rpm = rpm_source->connect_to(
     new LambdaTransform<float, float>([](float rps) {
@@ -131,8 +132,8 @@ inline void setup_engine_performance(
     })
   );
 
-  auto* base_stw   = new CurveInterpolator(&baseline_stw_curve);
-  auto* base_fuel = new CurveInterpolator(&baseline_fuel_curve);
+  auto* base_stw    = new CurveInterpolator(&baseline_stw_curve);
+  auto* base_fuel  = new CurveInterpolator(&baseline_fuel_curve);
   auto* rated_fuel = new CurveInterpolator(&rated_fuel_curve);
 
   rpm->connect_to(base_stw);
@@ -143,14 +144,12 @@ inline void setup_engine_performance(
     new LambdaTransform<float, float>([=](float r) {
 
       float stw = stw_knots ? stw_knots->get() : NAN;
-      if (!std::isnan(stw) && !stw_invalid(r, stw)) {
+      if (!std::isnan(stw) && !stw_invalid(r, stw))
         return stw;
-      }
 
       float sog = sog_knots ? sog_knots->get() : NAN;
-      if (!std::isnan(sog) && sog > 0.0f) {
+      if (!std::isnan(sog) && sog > 0.0f)
         return sog;
-      }
 
       return NAN;
     })
@@ -177,11 +176,10 @@ inline void setup_engine_performance(
       }
 
       float fuel;
-      if (std::isnan(spd) || spd <= 0.0f || expectedSTW <= 0.0f) {
-        fuel = baseFuel;   // fallback
-      } else {
+      if (std::isnan(spd) || spd <= 0.0f || expectedSTW <= 0.0f)
+        fuel = baseFuel;
+      else
         fuel = baseFuel * (expectedSTW / spd);
-      }
 
       if (!std::isnan(fuelMax))
         fuel = std::min(fuel, fuelMax);

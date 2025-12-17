@@ -30,8 +30,6 @@
 #include "sensesp/signalk/signalk_output.h"
 #include "sensesp/signalk/signalk_value_listener.h"
 
-
-
 // wifi serial monitor
 //#include "WebSerial.h"
 
@@ -50,7 +48,7 @@
 #include "sensesp/transforms/frequency.h"
 #include "sensesp/transforms/curveinterpolator.h"
 #include "sensesp/transforms/moving_average.h"
-
+#include "sensesp/transforms/lambda_transform.h"   // <-- REQUIRED for LambdaTransform used in setup_rpm_sensor()
 
 // Custom functions
 #include "sender_resistance.h"
@@ -59,7 +57,6 @@
 #include "calibrated_analog_input.h"
 #include "oil_pressure_sender.h"
 #include "engine_performance.h"
-
 
 // Simulator/test options
 #ifdef RPM_SIMULATOR
@@ -102,7 +99,6 @@ static const uint8_t PIN_ADC_OIL_PRESSURE = 36;   // choose free ADC pin
 static const float OIL_ADC_REF_VOLTAGE = 2.5f;    // ref voltage of the Firebeetle esp32-e
 static const float OIL_PULLUP_RESISTOR = 220.0f;   // Resistance (ohm) in mid-range of oil px sender values
 
-
 // -----------------------------------------------
 // CONSTANTS
 // -----------------------------------------------
@@ -111,7 +107,7 @@ static const float ADC_SAMPLE_RATE_HZ = 10.0f;
 // FOR Yanmar COOLANT TEMP SENDER:
 // DFROBOT Gravity Voltage Divider (SEN0003 / DFR0051)
 // R1 = 30kΩ, R2 = 7.5kΩ → divider ratio = 1/5 → gain = 5.0
-// 
+//
 // ⚠️ VOLTAGE ANALYSIS (14.0V max system):
 // - Normal operation (29-1352Ω sender): 0.30V - 1.49V ✅ SAFE
 // - Open circuit fault (14.0V): 2.8V → EXCEEDS recommended 2.45V spec
@@ -122,13 +118,12 @@ static const float ADC_SAMPLE_RATE_HZ = 10.0f;
 //
 static const float DIV_R1 = 30000.0f;     // Top resistor
 static const float DIV_R2 = 7500.0f;      // Bottom resistor
-static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;  
+static const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
 // COOLANT_DIVIDER_GAIN = 5.0
 
 static const float COOLANT_SUPPLY_VOLTAGE = 13.5f;  //13.5 volt nominal, indication will be close enough at 12-14 VDC
 static const float COOLANT_GAUGE_RESISTOR = 1180.0f;   // Derived from 6.8V @ 1352Ω coolant temp gauge resistance
 // recheck this at operating temperature
-
 
 static const float RPM_TEETH = 116.0f;
 static const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
@@ -137,14 +132,6 @@ static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 
 Frequency* g_frequency = nullptr;
 // Transform<float, float>* g_fuel_lph = nullptr;  // FIXED
-
-void setup_engine_performance(
-    Frequency* rpm,
-    ValueProducer<float>* stw,
-    ValueProducer<float>* sog,
-    ValueProducer<float>* aws,
-    ValueProducer<float>* awa
-);
 
 // ============================================================================
 // SETUP
@@ -172,14 +159,14 @@ void setup() {
 
   sensesp_app = builder.get_app();
 
-new OilPressureSender(
-    PIN_ADC_OIL_PRESSURE,
-    OIL_ADC_REF_VOLTAGE,
-    OIL_PULLUP_RESISTOR,
-    ADC_SAMPLE_RATE_HZ,
-    "propulsion.engine.oilPressure",
-    "/config/sensors/oil_pressure"
-);
+  new OilPressureSender(
+      PIN_ADC_OIL_PRESSURE,
+      OIL_ADC_REF_VOLTAGE,
+      OIL_PULLUP_RESISTOR,
+      ADC_SAMPLE_RATE_HZ,
+      "propulsion.engine.oilPressure",
+      "/config/sensors/oil_pressure"
+  );
 
   setup_temperature_sensors();
   setup_coolant_sender();
@@ -188,35 +175,34 @@ new OilPressureSender(
   setup_engine_hours();
   // setup_engine_load(g_frequency, g_fuel_lph);
 
-// --------------------------------------------------------------------------
-// Signal K INPUTS for engine performance model (SensESP v3.x)
-// --------------------------------------------------------------------------
-auto* stw = new SKValueListener<float>(
-    "navigation.speedThroughWater",
-    1000,
-    "/config/inputs/stw"
-);
+  // --------------------------------------------------------------------------
+  // Signal K INPUTS for engine performance model (SensESP v3.x)
+  // --------------------------------------------------------------------------
+  auto* stw = new SKValueListener<float>(
+      "navigation.speedThroughWater",
+      1000,
+      "/config/inputs/stw"
+  );
 
-auto* sog = new SKValueListener<float>(
-    "navigation.speedOverGround",
-    1000,
-    "/config/inputs/sog"
-);
+  auto* sog = new SKValueListener<float>(
+      "navigation.speedOverGround",
+      1000,
+      "/config/inputs/sog"
+  );
 
-auto* aws = new SKValueListener<float>(
-    "environment.wind.speedApparent",
-    1000,
-    "/config/inputs/aws"
-);
+  auto* aws = new SKValueListener<float>(
+      "environment.wind.speedApparent",
+      1000,
+      "/config/inputs/aws"
+  );
 
-auto* awa = new SKValueListener<float>(
-    "environment.wind.angleApparent",
-    1000,
-    "/config/inputs/awa"
-);
+  auto* awa = new SKValueListener<float>(
+      "environment.wind.angleApparent",
+      1000,
+      "/config/inputs/awa"
+  );
 
-
- // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Engine performance (fuel flow + engine load)
   // --------------------------------------------------------------------------
   setup_engine_performance(
@@ -266,7 +252,6 @@ void setup_temperature_sensors() {
       ->set_description("Linear calibration for engine room temperature sensor")
       ->set_sort_order(101);
 
-
   ConfigItem(sk_engine)
       ->set_title("Engine Room SK Path")
       ->set_description("Signal K path for engine room temperature")
@@ -291,7 +276,7 @@ void setup_temperature_sensors() {
       "/config/outputs/sk/transmission_temp"
   );
 
-// send same values to exhaust temp path for B&G zeus
+  // send same values to exhaust temp path for B&G zeus
   auto* sk_exhaust2 = new SKOutputFloat(
       "propulsion.engine.exhaustTemperature",
       "/config/outputs/sk/exhaust_temp"
@@ -319,7 +304,6 @@ void setup_temperature_sensors() {
       ->set_title("Exhaust SK Path normal")
       ->set_description("Signal K path for exhaust temperature for chartplotter")
       ->set_sort_order(203);
-
 
   // ========================= ALTERNATOR ==============================
 
@@ -356,9 +340,6 @@ void setup_temperature_sensors() {
     ->set_sort_order(302);
 }
 
-
-
-
 // ============================================================================
 // COOLANT SENDER — FireBeetle ESP32-E (SensESP v3.1.1 compatible)
 // ============================================================================
@@ -371,7 +352,6 @@ void setup_temperature_sensors() {
 //  * Temperature lookup via American sender curve
 //  * Full debug chain
 // ============================================================================
-
 void setup_coolant_sender() {
 
   //
@@ -467,9 +447,9 @@ void setup_coolant_sender() {
   //
   // STEP 8 — 5 second moving average (50 samples @ 10 Hz)
   //
-auto* temp_C_avg = temp_C->connect_to(
-    new MovingAverage(50)   // 5 seconds @ 10Hz
-);
+  auto* temp_C_avg = temp_C->connect_to(
+      new MovingAverage(50)   // 5 seconds @ 10Hz
+  );
 
   //
   // STEP 9 — Prepare SK output (manually updated every 10 sec)
@@ -484,37 +464,35 @@ auto* temp_C_avg = temp_C->connect_to(
       ->set_description("Signal K path for engine Coolant Temp Sender")
       ->set_sort_order(750);
 
-  
-// STEP 10 — Throttle + gate coolant temp: update every 0.5 seconds,
-// but only publish when RPM >= 500, otherwise publish NaN
+  // STEP 10 — Throttle + gate coolant temp: update every 0.5 seconds,
+  // but only publish when RPM >= 500, otherwise publish NaN
+  sensesp_app->get_event_loop()->onRepeat(
+      500,   // milliseconds
+      [temp_C_avg, sk_coolant]() {
 
-sensesp_app->get_event_loop()->onRepeat(
-    500,   // milliseconds
-    [temp_C_avg, sk_coolant]() {
+        // If RPM sensor isn't up yet, treat as "engine off"
+        if (g_frequency == nullptr) {
+          sk_coolant->set_input(NAN);
+          return;
+        }
 
-      // If RPM sensor isn't up yet, treat as "engine off"
-      if (g_frequency == nullptr) {
-        sk_coolant->set_input(NAN);
-        return;
+        // g_frequency is rev/s, convert to RPM
+        const float rpm = g_frequency->get() * 60.0f;
+
+        if (std::isnan(rpm) || rpm < 500.0f) {
+          sk_coolant->set_input(NAN);
+          return;
+        }
+
+        // Engine running: publish coolant temp (°C -> K)
+        const float c = temp_C_avg->get();
+        if (!std::isnan(c)) {
+          sk_coolant->set_input(c + 273.15f);
+        } else {
+          sk_coolant->set_input(NAN);
+        }
       }
-
-      // g_frequency is rev/s, convert to RPM
-      const float rpm = g_frequency->get() * 60.0f;
-
-      if (std::isnan(rpm) || rpm < 500.0f) {
-        sk_coolant->set_input(NAN);
-        return;
-      }
-
-      // Engine running: publish coolant temp (°C -> K)
-      const float c = temp_C_avg->get();
-      if (!std::isnan(c)) {
-        sk_coolant->set_input(c + 273.15f);
-      } else {
-        sk_coolant->set_input(NAN);
-      }
-    }
-);
+  );
 
   //
   // STEP 11 — DEBUG OUTPUTS (conditional compilation)
@@ -531,22 +509,20 @@ sensesp_app->get_event_loop()->onRepeat(
 #endif
 }
 
-
 // ============================================================================
 // RPM SENSOR — UI + EDITABLE SK PATH
 // ============================================================================
-
 void setup_rpm_sensor() {
 
   //
   // 1. Pulse counter (interrupt-driven)
   //
-auto* pulse_input = new DigitalInputCounter(
+  auto* pulse_input = new DigitalInputCounter(
       PIN_RPM,
       INPUT,
       CHANGE,
       0      // reset interval
-);
+  );
 
   //
   // 2. Frequency transform: pulses/sec → revolutions/sec
@@ -580,7 +556,7 @@ auto* pulse_input = new DigitalInputCounter(
       "/config/outputs/sk/rpm"
   );
 
- // rpm_output->connect_to(sk_rpm);
+  // rpm_output->connect_to(sk_rpm);
   g_frequency->connect_to(sk_rpm);
 
   //
@@ -605,12 +581,10 @@ auto* pulse_input = new DigitalInputCounter(
       ->set_sort_order(500);
 
   //ConfigItem(RPM_TEETH)
-   //   ->set_title("RPM Teeth Count")
-    //  ->set_description("Number of teeth on the engine's tone wheel")
-    //  ->set_sort_order(501);
-
+  //   ->set_title("RPM Teeth Count")
+  //  ->set_description("Number of teeth on the engine's tone wheel")
+  //  ->set_sort_order(501);
 }
-
 
 // ============================================================================
 // ENGINE HOURS — UI + EDITABLE SK PATH
@@ -661,24 +635,23 @@ void setup_engine_hours() {
 void loop() {
 
 #ifdef RPM_SIMULATOR
-    // OPTIONAL: print pulse count without blocking
-    static uint32_t last_debug = 0;
-    if (millis() - last_debug > 200) {
-        Serial.printf("Pulses: %u\n", pulse_count);
-        last_debug = millis();
-    }
+  // OPTIONAL: print pulse count without blocking
+  static uint32_t last_debug = 0;
+  if (millis() - last_debug > 200) {
+    Serial.printf("Pulses: %u\n", pulse_count);
+    last_debug = millis();
+  }
 #endif
 
-    sensesp_app->get_event_loop()->tick();
+  sensesp_app->get_event_loop()->tick();
 
 #ifdef RPM_SIMULATOR
-    loopRPMSimulator();
+  loopRPMSimulator();
 #endif
 
 #if COOLANT_SIMULATOR
   loopCoolantSimulator();
 #endif
-
 }
-#endif  // UNIT_TEST
 
+#endif  // UNIT_TEST
