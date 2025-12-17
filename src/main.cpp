@@ -242,12 +242,22 @@ void setup_temperature_sensors() {
       "/config/sensors/temperature/exhaust/linear"
   );
 
-  auto* sk_exhaust = new SKOutputFloat(
+  auto* sk_exhaust1 = new SKOutputFloat(
+      "propulsion.engine.transmision.oilTemperature",
+      // i70s doesn't acceept exhaust temp.... so we'll use oil temp
+      // "propulsion.engine.exhaustTemperature",
+      "/config/outputs/sk/transmission_temp"
+  );
+
+// send same values to exhaust temp path for B&G zeus
+  auto* sk_exhaust2 = new SKOutputFloat(
       "propulsion.engine.exhaustTemperature",
       "/config/outputs/sk/exhaust_temp"
   );
 
-  t2->connect_to(t2_linear)->connect_to(sk_exhaust);
+
+  t2->connect_to(t2_linear)->connect_to(sk_exhaust1);
+  t2->connect_to(t2_linear)->connect_to(sk_exhaust2);
 
   ConfigItem(t2)
     ->set_title("Exhaust DS18B20")
@@ -259,12 +269,15 @@ void setup_temperature_sensors() {
     ->set_description("Linear calibration for exhaust temperature sensor")
     ->set_sort_order(201);
 
-  ConfigItem(sk_exhaust)
-      ->set_title("Exhaust SK Path")
-      ->set_description("Signal K path for exhaust temperature")
+  ConfigItem(sk_exhaust1)
+      ->set_title("Exhaust SK Path i70s")
+      ->set_description("Signal K path for exhaust temperature for i70s")
       ->set_sort_order(202);
 
-
+  ConfigItem(sk_exhaust2)
+      ->set_title("Exhaust SK Path normal")
+      ->set_description("Signal K path for exhaust temperature for chartplotter")
+      ->set_sort_order(203);
 
 
   // ========================= ALTERNATOR ==============================
@@ -430,19 +443,37 @@ auto* temp_C_avg = temp_C->connect_to(
       ->set_description("Signal K path for engine Coolant Temp Sender")
       ->set_sort_order(750);
 
-  //
-  // STEP 10 — Throttle SK output: update every 2 seconds
-  //
-  sensesp_app->get_event_loop()->onRepeat(
-      500,   // milliseconds
-      [temp_C_avg, sk_coolant]() {
-        
-        float c = temp_C_avg->get();
-        if (!isnan(c)) {
-          sk_coolant->set_input(c + 273.15f);   // convert °C → K
-        }
+  
+// STEP 10 — Throttle + gate coolant temp: update every 0.5 seconds,
+// but only publish when RPM >= 500, otherwise publish NaN
+
+sensesp_app->get_event_loop()->onRepeat(
+    500,   // milliseconds
+    [temp_C_avg, sk_coolant]() {
+
+      // If RPM sensor isn't up yet, treat as "engine off"
+      if (g_frequency == nullptr) {
+        sk_coolant->set_input(NAN);
+        return;
       }
-  );
+
+      // g_frequency is rev/s, convert to RPM
+      const float rpm = g_frequency->get() * 60.0f;
+
+      if (std::isnan(rpm) || rpm < 500.0f) {
+        sk_coolant->set_input(NAN);
+        return;
+      }
+
+      // Engine running: publish coolant temp (°C -> K)
+      const float c = temp_C_avg->get();
+      if (!std::isnan(c)) {
+        sk_coolant->set_input(c + 273.15f);
+      } else {
+        sk_coolant->set_input(NAN);
+      }
+    }
+);
 
   //
   // STEP 11 — DEBUG OUTPUTS (conditional compilation)
