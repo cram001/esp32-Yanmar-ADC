@@ -4,9 +4,10 @@
 // Features:
 //  - Engine Coolant sender via ADC (FireBeetle calibrated) (works in conjuction with gauge)
 //  - 3x OneWire temperature sensors
-//  - RPM via magnetic pickup
-//  - Fuel flow estimation based on RPM
+//  - RPM via magnetic pickup (works in conjunction with gauge)
+//  - Fuel flow estimation based on RPM (requires obtaining real fuel curve at 2000, 2800 and 3500 RPM)
 //  - Engine hours accumulator
+//  - Engine load estimation based on RPM and fuel flow
 //  - SK debug output
 //  - OTA update
 //  - Full UI configuration for SK paths and calibration, setting wifi and SK server address
@@ -15,16 +16,9 @@
 //  as AP).
 //  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired.)
 // oil pressure sender sierra OP24301 Range-1 Gauge: 240 Ohms at 0 PSI
-//Range-1 Gauge: 200 Ohms at 10 PSI
-//Range-1 Gauge: 160 Ohms at 20 PSI
-//Range-1 Gauge: 140 Ohms at 30 PSI
-//Range-1 Gauge: 120 Ohms at 40 PSI
-//Range-1 Gauge: 100 Ohms at 50 PSI
-//Range-1 Gauge: 90 Ohms at 60 PSI
-//Range-1 Gauge: 75 Ohms at 70 PSI
-//Range-1 Gauge: 60 Ohms at 80 PSI
-//Range-1 Gauge: 45 Ohms at 90 PSI
-//Range-1 Gauge: 33 Ohms at 100 PSI
+// engine coolant sender: american resistance type D
+// one wire sensors: DS18B20
+// Designed for flywheel gear tooth rpm sensor
 // ============================================================================
 // ============================================================================
 #ifndef UNIT_TEST
@@ -61,6 +55,7 @@
 #include "engine_load.h"
 #include "calibrated_analog_input.h"
 #include "oil_pressure_sender.h"
+#include "engine_performance.h"
 
 
 // Simulator/test options
@@ -86,8 +81,9 @@ using namespace sensesp::onewire;
 void setup_temperature_sensors();
 void setup_coolant_sender();
 void setup_rpm_sensor();
-void setup_fuel_flow();
+// void setup_fuel_flow();
 void setup_engine_hours();
+void setup_engine_load();
 
 // -----------------------------------------------
 // PIN DEFINITIONS — FIREBEETLE ESP32-E   EDIT THESE IF REQUIRE FOR YOUR BOARD
@@ -184,6 +180,41 @@ new OilPressureSender(
   setup_engine_load(g_frequency, g_fuel_lph);
 
 
+    // --------------------------------------------------------------------------
+  // Signal K INPUTS for engine performance model
+  // --------------------------------------------------------------------------
+  auto* stw = new SKInputFloat(
+      "navigation.speedThroughWater",
+      "/config/inputs/stw"
+  );
+
+  auto* sog = new SKInputFloat(
+      "navigation.speedOverGround",
+      "/config/inputs/sog"
+  );
+
+  auto* aws = new SKInputFloat(
+      "environment.wind.speedApparent",
+      "/config/inputs/aws"
+  );
+
+  auto* awa = new SKInputFloat(
+      "environment.wind.angleApparent",
+      "/config/inputs/awa"
+  );
+
+}
+
+ // --------------------------------------------------------------------------
+  // Engine performance (fuel flow + engine load)
+  // --------------------------------------------------------------------------
+  setup_engine_performance(
+      g_frequency,
+      stw,
+      sog,
+      aws,
+      awa
+  );
 }
 
 // ============================================================================
@@ -568,105 +599,6 @@ auto* pulse_input = new DigitalInputCounter(
     //  ->set_sort_order(501);
 
 }
-
-
-// ============================================================================
-// FUEL FLOW — UI + EDITABLE SK PATH  engine RPM to LPH curve
-// ============================================================================
-
-
-#include "sensesp/transforms/lambda_transform.h"   // ← REQUIRED
-
-void setup_fuel_flow() {
-
-  // -------------------------
-  // 1) Convert frequency (Hz) → RPM
-  // -------------------------
-  auto* rpm_input = g_frequency->connect_to(
-      new LambdaTransform<float, float>([](float hz) {
-        return hz * 60.0f;  // rev/s → RPM
-      })
-  );
-
-  // Debug readable RPM (conditional compilation)
-#if ENABLE_DEBUG_OUTPUTS
-  rpm_input->connect_to(new SKOutputFloat(
-      "debug.rpm_readable",
-      "/config/outputs/sk/debug_rpm_readable"
-  ));
-#endif
-
-  // -------------------------
-  // 2) RPM → Liters per hour curve
-  // -------------------------
-  static std::set<CurveInterpolator::Sample> rpm_to_lph = {
-      {500, 0.6},
-      {850, 0.7},
-      {1500, 1.8},
-      {2000, 2.3},
-      {2800, 2.7},
-      {3200, 3.4},
-      {3900, 6.5},
-  };
-
-  auto* fuel_lph = rpm_input->connect_to(
-      new CurveInterpolator(&rpm_to_lph,
-                            "/config/sensors/fuel/lph_curve")
-  );
-
-  
-#if ENABLE_DEBUG_OUTPUTS
-  fuel_lph->connect_to(new SKOutputFloat(
-      "debug.fuel.lph",
-      "/config/outputs/sk/debug_fuel_lph"
-  ));
-#endif
-
-  g_fuel_lph = fuel_lph;   // expose to engine_load module
-
-
-  // -------------------------
-  // 3) Convert LPH → m³/s  
-  //    Only send if RPM ≥ 600
-  // -------------------------
-  auto* fuel_m3s = rpm_input->connect_to(
-      new LambdaTransform<float, float>([fuel_lph](float rpm) {
-        if (rpm < 600) {
-          return NAN;     // Signal K will ignore it instead of showing null
-        }
-
-        float lph = fuel_lph->get();
-        if (!isnan(lph)) {
-          return (lph / 1000.0f) / 3600.0f;  // L → m³, hr → sec
-        }
-
-        return NAN;
-      })
-  );
-
-  // -------------------------
-  // 4) Output final fuel rate in m³/s → Signal K
-  // -------------------------
-  fuel_m3s->connect_to(new SKOutputFloat(
-      "propulsion.engine.fuel.rate",
-      "/config/outputs/sk/fuel_rate_m3s"
-  ));
-
-  // Debug m³/s output (conditional compilation)
-#if ENABLE_DEBUG_OUTPUTS
-  fuel_m3s->connect_to(new SKOutputFloat(
-      "debug.fuel.m3s",
-      "/config/outputs/sk/debug_fuel_m3s"
-  ));
-#endif
-
-}
-
-// ============================================================================
-// ENGINE LOAD
-// ============================================================================
-
-
 
 
 // ============================================================================
