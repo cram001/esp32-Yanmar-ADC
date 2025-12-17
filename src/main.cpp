@@ -255,7 +255,6 @@ void setup_temperature_sensors() {
       "/config/outputs/sk/exhaust_temp"
   );
 
-
   t2->connect_to(t2_linear)->connect_to(sk_exhaust1);
   t2->connect_to(t2_linear)->connect_to(sk_exhaust2);
 
