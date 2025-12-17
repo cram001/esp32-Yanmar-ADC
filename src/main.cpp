@@ -434,7 +434,7 @@ auto* temp_C_avg = temp_C->connect_to(
   // STEP 10 — Throttle SK output: update every 2 seconds
   //
   sensesp_app->get_event_loop()->onRepeat(
-      2000,   // milliseconds
+      500,   // milliseconds
       [temp_C_avg, sk_coolant]() {
         
         float c = temp_C_avg->get();
