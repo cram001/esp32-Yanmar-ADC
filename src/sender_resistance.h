@@ -48,8 +48,11 @@ class SenderResistance : public sensesp::Transform<float, float> {
     //                 = Vadc * 5.0
     //
     // ============================================================
-    constexpr float DIVIDER_SCALE = 5.0f;
-    float Vtap = vadc * DIVIDER_SCALE;
+    // constexpr float DIVIDER_SCALE = 5.0f;
+    // float Vtap = vadc * DIVIDER_SCALE;
+    float Vtap = vadc;   // input is already the real sender tap voltage (pre-divider)
+
+
 
     if (Vtap <= 0.0f) {
       emit(NAN);
