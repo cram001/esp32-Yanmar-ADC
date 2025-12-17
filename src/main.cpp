@@ -28,6 +28,9 @@
 // SensESP core
 #include "sensesp_app_builder.h"
 #include "sensesp/signalk/signalk_output.h"
+#include "sensesp/signalk/signalk_value_listener.h"
+
+
 
 // wifi serial monitor
 //#include "WebSerial.h"
@@ -52,7 +55,7 @@
 // Custom functions
 #include "sender_resistance.h"
 #include "engine_hours.h"
-#include "engine_load.h"
+//#include "engine_load.h"
 #include "calibrated_analog_input.h"
 #include "oil_pressure_sender.h"
 #include "engine_performance.h"
@@ -83,7 +86,7 @@ void setup_coolant_sender();
 void setup_rpm_sensor();
 // void setup_fuel_flow();
 void setup_engine_hours();
-void setup_engine_load();
+// void setup_engine_load();
 
 // -----------------------------------------------
 // PIN DEFINITIONS — FIREBEETLE ESP32-E   EDIT THESE IF REQUIRE FOR YOUR BOARD
@@ -133,9 +136,15 @@ static const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
 static const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 
 Frequency* g_frequency = nullptr;
-Transform<float, float>* g_fuel_lph = nullptr;  // FIXED
+// Transform<float, float>* g_fuel_lph = nullptr;  // FIXED
 
-
+void setup_engine_performance(
+    Frequency* rpm,
+    ValueProducer<float>* stw,
+    ValueProducer<float>* sog,
+    ValueProducer<float>* aws,
+    ValueProducer<float>* awa
+);
 
 // ============================================================================
 // SETUP
@@ -175,35 +184,37 @@ new OilPressureSender(
   setup_temperature_sensors();
   setup_coolant_sender();
   setup_rpm_sensor();
-  setup_fuel_flow();
+  // setup_fuel_flow();
   setup_engine_hours();
-  setup_engine_load(g_frequency, g_fuel_lph);
+  // setup_engine_load(g_frequency, g_fuel_lph);
 
+// --------------------------------------------------------------------------
+// Signal K INPUTS for engine performance model (SensESP v3.x)
+// --------------------------------------------------------------------------
+auto* stw = new SKValueListener<float>(
+    "navigation.speedThroughWater",
+    1000,
+    "/config/inputs/stw"
+);
 
-    // --------------------------------------------------------------------------
-  // Signal K INPUTS for engine performance model
-  // --------------------------------------------------------------------------
-  auto* stw = new SKInputFloat(
-      "navigation.speedThroughWater",
-      "/config/inputs/stw"
-  );
+auto* sog = new SKValueListener<float>(
+    "navigation.speedOverGround",
+    1000,
+    "/config/inputs/sog"
+);
 
-  auto* sog = new SKInputFloat(
-      "navigation.speedOverGround",
-      "/config/inputs/sog"
-  );
+auto* aws = new SKValueListener<float>(
+    "environment.wind.speedApparent",
+    1000,
+    "/config/inputs/aws"
+);
 
-  auto* aws = new SKInputFloat(
-      "environment.wind.speedApparent",
-      "/config/inputs/aws"
-  );
+auto* awa = new SKValueListener<float>(
+    "environment.wind.angleApparent",
+    1000,
+    "/config/inputs/awa"
+);
 
-  auto* awa = new SKInputFloat(
-      "environment.wind.angleApparent",
-      "/config/inputs/awa"
-  );
-
-}
 
  // --------------------------------------------------------------------------
   // Engine performance (fuel flow + engine load)
