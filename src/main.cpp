@@ -174,7 +174,7 @@ void setup() {
   // ---- Temperatures -------------------------------------------------------
   new StatusPageItem<float>("Exhaust Elbow (°C)",
                             temp_elbow_c,
-                            "OneWireTemperatures",
+                            "OneWire Temperatures",
                             10);
 
   new StatusPageItem<float>("Engine Compartment (°C)",

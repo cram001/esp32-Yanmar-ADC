@@ -1,7 +1,39 @@
-// Calculates engine RPM based on magnetic flywheel sender input,
-// From Signal K, gets SOG, STW, AWS, AWA to compute engine load and fuel consumption
-// Estimates engine load and fuel flow, makes rough baseline corrections
-// for hull fouling and wind.
+// ============================================================================
+// ENGINE PERFORMANCE & FUEL FLOW ESTIMATION
+// ============================================================================
+//
+// Design invariants:
+//  1) At a given RPM, reduced STW MUST increase engine load.
+//  2) Current (SOG–STW delta) has no direct effect on engine load.
+//  3) Apparent wind represents aerodynamic drag:
+//     • Headwind  → increases load
+//     • Crosswind → increases load (leeway + rudder drag)
+//     • Tailwind  → may slightly reduce load (bounded)
+//  4) Wind must NEVER excuse a loss of STW.
+//  5) Wind effects are ignored below ~7 knots apparent.
+//
+// ---------------------------------------------------------------------------
+// REUSABLE TEST CASES (RPM = 2800)
+//
+// Baseline:
+//   STW 6.4, calm → Fuel ≈ 2.7 L/hr, Load ≈ 71%
+//
+// Case 1 (towing):
+//   STW 5.9, AWS 5 → Fuel ↑ (~2.9), Load ↑
+//
+// Case 2 (favorable current only):
+//   STW 6.4, SOG 4.6 → Fuel = baseline, Load = baseline
+//
+// Case 3 (towing + headwind):
+//   STW 5.2, AWS 15 head → Fuel ↑↑
+//
+// Case 4 (strong current + headwind):
+//   STW 5.9, SOG 7.5, AWS 15 head → Fuel ↑
+//
+// Case 7 (strong crosswind):
+//   STW 4.9, AWS 25 @ 75° → Fuel ↑↑
+//
+// ============================================================================
 
 #pragma once
 
@@ -21,14 +53,14 @@
 using namespace sensesp;
 
 // ---------------------------------------------------------------------------
-// Compile-time debug guard
+// Debug guard
 // ---------------------------------------------------------------------------
 #ifndef ENABLE_DEBUG_OUTPUTS
 #define ENABLE_DEBUG_OUTPUTS 0
 #endif
 
 // ---------------------------------------------------------------------------
-// C++11-compatible clamp helper
+// Clamp helper (C++11 safe)
 // ---------------------------------------------------------------------------
 template <typename T>
 static inline T clamp_val(T v, T lo, T hi) {
@@ -56,7 +88,7 @@ static std::set<CurveInterpolator::Sample> rated_fuel_curve = {
 };
 
 // ============================================================================
-// STW FOULING RULES
+// STW SANITY FILTER
 // ============================================================================
 static inline bool stw_invalid(float rpm, float stw) {
   if (rpm > 3000 && stw < 4.0f) return true;
@@ -66,36 +98,32 @@ static inline bool stw_invalid(float rpm, float stw) {
 }
 
 // ============================================================================
-// WIND SPEED FACTOR
-// Positive = tailwind (speed gain), negative = headwind
+// WIND LOAD MULTIPLIER
+// Converts apparent wind into a load modifier.
+//  • < 7 kn → ignored
+//  • Head & crosswind → increase load
+//  • Tailwind → small bounded reduction
 // ============================================================================
-static inline float wind_speed_factor(float aws_kn, float awa_rad) {
-  if (std::isnan(aws_kn) || std::isnan(awa_rad)) return 0.0f;
+static inline float wind_load_factor(float aws_kn, float awa_rad) {
+  if (std::isnan(aws_kn) || std::isnan(awa_rad)) return 1.0f;
+  if (aws_kn < 7.0f) return 1.0f;
 
-  const float PI_F = 3.14159265f;
-  float awa = clamp_val(std::fabs(awa_rad), 0.0f, PI_F);
+  const float PI = 3.14159265f;
+  float awa = clamp_val(std::fabs(awa_rad), 0.0f, PI);
 
-  float cos_a = std::cos(awa);
-  float sin_a = std::sin(awa);
+  float head_comp  = std::cos(awa);   // +1 headwind, -1 tailwind
+  float cross_comp = std::sin(awa);   // 0..1 crosswind
 
-  float aws = (aws_kn > 30.0f) ? 30.0f : aws_kn;
+  float aws = clamp_val(aws_kn, 7.0f, 30.0f);
 
-  float head = 0.0f;
-  float cross = 0.0f;
+  // Conservative linear scaling (tuned for auxiliaries)
+  float head_load  = (aws - 7.0f) / 23.0f * 0.25f * head_comp;
+  float cross_load = (aws - 7.0f) / 23.0f * 0.20f * cross_comp;
 
-  if (aws > 6.0f) {
-    if (aws <= 15.0f)      head = (aws - 6.0f) / 9.0f * 0.13f;
-    else if (aws <= 20.0f) head = 0.13f + (aws - 15.0f) / 5.0f * 0.07f;
-    else                   head = 0.20f + (aws - 20.0f) / 10.0f * 0.15f;
-  }
+  float factor = 1.0f + head_load + cross_load;
 
-  if (aws > 6.0f) {
-    if (aws <= 15.0f)      cross = (aws - 6.0f) / 9.0f * 0.08f;
-    else if (aws <= 20.0f) cross = 0.08f + (aws - 15.0f) / 5.0f * 0.02f;
-    else                   cross = 0.10f + (aws - 20.0f) / 10.0f * 0.05f;
-  }
-
-  return (-head * cos_a) - (cross * sin_a);
+  // Tailwind help is limited; wind must never erase STW penalty
+  return clamp_val(factor, 0.90f, 1.40f);
 }
 
 // ============================================================================
@@ -151,55 +179,39 @@ inline void setup_engine_performance(
 
       if (std::isnan(baseFuel) || baseFuel <= 0.0f) return NAN;
 
-      float spd = NAN;
-
+      float stw = NAN;
       if (stw_knots) {
-        float stw = stw_knots->get();
-        if (!std::isnan(stw) && stw > 0.0f && stw < SPEED_MAX &&
-            !stw_invalid(r, stw))
-          spd = stw;
-      }
-
-      if (std::isnan(spd) && sog_knots) {
-        float sog = sog_knots->get();
-        if (!std::isnan(sog) && sog > 0.0f && sog < SPEED_MAX)
-          spd = sog;
-      }
-
-      float windFactor = 0.0f;
-      float expectedSTW = baseSTW;
-
-      if (aws_knots && awa_rad) {
-        float aws = aws_knots->get();
-        float awa = awa_rad->get();
-        if (!std::isnan(aws) && !std::isnan(awa)) {
-          windFactor = clamp_val(
-            wind_speed_factor(aws, awa), -0.4f, 0.1f
-          );
-          expectedSTW *= (1.0f + windFactor);
+        float s = stw_knots->get();
+        if (!std::isnan(s) && s > 0.0f && s < SPEED_MAX &&
+            !stw_invalid(r, s)) {
+          stw = s;
         }
       }
 
-#if ENABLE_DEBUG_OUTPUTS
-      static float dbg_expectedSTW;
-      static float dbg_actualSpeed;
-      static float dbg_windFactor;
-      static float dbg_fuelScale;
+      // Core invariant: STW deficit drives load
+      float stw_factor =
+        (!std::isnan(stw) && stw > 0.0f)
+          ? clamp_val(baseSTW / stw, 1.0f, 2.5f)
+          : 1.0f;
 
-      dbg_expectedSTW = expectedSTW;
-      dbg_actualSpeed = spd;
-      dbg_windFactor  = windFactor;
-#endif
+      // Wind adds load but never excuses STW loss
+      float wind_factor = 1.0f;
+      if (aws_knots && awa_rad) {
+        wind_factor = wind_load_factor(
+          aws_knots->get(), awa_rad->get()
+        );
+      }
 
-      float fuel = (std::isnan(spd) || spd <= 0.0f || expectedSTW <= 0.0f)
-                     ? baseFuel
-                     : baseFuel * (expectedSTW / spd);
+      float fuel = baseFuel * stw_factor * wind_factor;
 
       if (!std::isnan(fuelMax))
         fuel = (fuel > fuelMax) ? fuelMax : fuel;
 
 #if ENABLE_DEBUG_OUTPUTS
-      dbg_fuelScale = fuel / baseFuel;
+      static float dbg_stw_factor;
+      static float dbg_wind_factor;
+      dbg_stw_factor  = stw_factor;
+      dbg_wind_factor = wind_factor;
 #endif
 
       return clamp_val(fuel, 0.0f, FUEL_MAX_ABS);
@@ -207,7 +219,7 @@ inline void setup_engine_performance(
   );
 
 #if ENABLE_DEBUG_OUTPUTS
-  fuel_lph->connect_to(new SKOutputFloat("debug.engine.fuelScale"));
+  fuel_lph->connect_to(new SKOutputFloat("debug.engine.fuelLph"));
 #endif
 
   fuel_lph->connect_to(
