@@ -1,35 +1,43 @@
 // ============================================================================
-// ENGINE PERFORMANCE & FUEL FLOW ESTIMATION  (SensESP v3.1.0 compatible)
+// ENGINE PERFORMANCE & FUEL FLOW ESTIMATION  (SensESP v3.1.0)
 // ============================================================================
 //
 // Core invariants:
-//  1) Reduced STW at a given RPM increases load (when STW is trusted).
+//
+//  1) Reduced STW at a given RPM increases engine load (when STW is trusted).
 //  2) Current (SOG–STW delta) has NO direct effect on engine load.
-//  3) Apparent wind adds aerodynamic drag (head & crosswind ↑ load).
-//  4) Wind NEVER excuses a loss of STW.
+//  3) Apparent wind adds aerodynamic drag (head > cross).
+//  4) Tailwind helps, but never offsets hydrodynamic losses.
 //  5) Wind effects ignored below ~7 kn apparent.
-//  6) Operator may disable STW usage via Signal K config (1 = use, 0 = ignore).
+//  6) Operator may disable STW usage if sensor is unreliable.
+//  7) Fuel and load are smoothed (2 s moving average).
 //
 // ---------------------------------------------------------------------------
 // REUSABLE TEST CASES (RPM = 2800)
 //
 // Baseline:
-//   STW 6.4, calm → Fuel ≈ 2.7 L/hr, Load ≈ 71%
+//   STW 6.4, calm
+//     → Fuel ≈ 2.7 L/hr, Load ≈ 0.71
 //
-// Towing:
-//   STW 5.9 → Fuel ↑, Load ↑
+// Towing dinghy:
+//   STW 5.9
+//     → Fuel ↑, Load ↑
 //
 // Fouled STW sensor (override = 0):
-//   STW 3.6 → Fuel ≈ baseline
+//   STW 3.6
+//     → Fuel ≈ baseline
 //
 // Strong current only:
-//   STW 6.4, SOG 4.6 → Load unchanged
+//   STW 6.4, SOG 4.6
+//     → Load unchanged
 //
 // Strong headwind:
-//   STW 5.2, AWS 15 → Fuel ↑↑
+//   STW 5.2, AWS 15
+//     → Fuel ↑↑
 //
 // Strong crosswind:
-//   STW 4.9, AWS 25 @ 75° → Fuel ↑↑
+//   STW 4.9, AWS 25 @ 75°
+//     → Fuel ↑↑
 //
 // ============================================================================
 
@@ -45,12 +53,13 @@
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
 #include <sensesp/transforms/frequency.h>
+#include <sensesp/transforms/moving_average.h>
 #include <sensesp/signalk/signalk_output.h>
 
 using namespace sensesp;
 
 // ---------------------------------------------------------------------------
-// Clamp helper
+// Clamp helper (C++11 safe)
 // ---------------------------------------------------------------------------
 template <typename T>
 static inline T clamp_val(T v, T lo, T hi) {
@@ -78,7 +87,7 @@ static std::set<CurveInterpolator::Sample> rated_fuel_curve = {
 };
 
 // ============================================================================
-// STW sanity
+// STW SANITY CHECK
 // ============================================================================
 static inline bool stw_invalid(float rpm, float stw) {
   if (rpm > 3000 && stw < 4.0f) return true;
@@ -88,27 +97,43 @@ static inline bool stw_invalid(float rpm, float stw) {
 }
 
 // ============================================================================
-// Wind load multiplier
+// WIND LOAD MULTIPLIER (ASYMMETRIC)
+// Headwind hurts most, crosswind moderate, tailwind limited benefit
 // ============================================================================
 static inline float wind_load_factor(float aws, float awa) {
-  if (std::isnan(aws) || std::isnan(awa) || aws < 7.0f) return 1.0f;
+
+  if (std::isnan(aws) || std::isnan(awa) || aws < 7.0f) {
+    return 1.0f;
+  }
 
   constexpr float PI_F = 3.14159265f;
-  float a = clamp_val(fabsf(awa), 0.0f, PI_F);
 
-  float head  = cosf(a);
-  float cross = sinf(a);
+  float angle = clamp_val(fabsf(awa), 0.0f, PI_F);
+  float aws_c = clamp_val(aws, 7.0f, 30.0f);
 
-  aws = clamp_val(aws, 7.0f, 30.0f);
+  float head  =  cosf(angle);   // +1 headwind, -1 tailwind
+  float cross =  sinf(angle);   // 0..1 crosswind
 
-  float factor =
-    1.0f + (aws - 7.0f) / 23.0f * (0.25f * head + 0.20f * cross);
+  float strength = (aws_c - 7.0f) / 23.0f;
 
-  return clamp_val(factor, 0.9f, 1.4f);
+  float penalty = 0.0f;
+
+  if (head > 0.0f) {
+    // Headwind: strongest penalty
+    penalty += strength * head * 0.30f;
+  } else {
+    // Tailwind: limited benefit
+    penalty += strength * head * 0.12f;
+  }
+
+  // Crosswind always adds drag
+  penalty += strength * cross * 0.18f;
+
+  return clamp_val(1.0f + penalty, 0.90f, 1.45f);
 }
 
 // ============================================================================
-// SETUP
+// SETUP — ENGINE PERFORMANCE
 // ============================================================================
 inline void setup_engine_performance(
   Frequency* rpm_source,
@@ -117,6 +142,8 @@ inline void setup_engine_performance(
   ValueProducer<float>* aws_knots,
   ValueProducer<float>* awa_rad
 ) {
+  (void)sog_knots;  // explicitly unused by design
+
   if (!rpm_source) return;
 
   // -------------------------------------------------------------------------
@@ -134,7 +161,7 @@ inline void setup_engine_performance(
   auto* rpm = rpm_source->connect_to(
     new LambdaTransform<float,float>([](float rps){
       float r = rps * 60.0f;
-      return (r < 300 || r > 4500) ? NAN : r;
+      return (r < 300.0f || r > 4500.0f) ? NAN : r;
     })
   );
 
@@ -146,39 +173,56 @@ inline void setup_engine_performance(
   rpm->connect_to(base_fuel);
   rpm->connect_to(rated_fuel);
 
-  auto* fuel_lph = rpm->connect_to(
+  // -------------------------------------------------------------------------
+  // Fuel flow calculation (L/hr)
+  // -------------------------------------------------------------------------
+  auto* fuel_lph_raw = rpm->connect_to(
     new LambdaTransform<float,float>([=](float r){
 
       float baseFuel = base_fuel->get();
       float baseSTW  = base_stw->get();
       float fuelMax  = rated_fuel->get();
 
-      if (std::isnan(baseFuel)) return NAN;
+      if (std::isnan(baseFuel) || baseFuel <= 0.0f) return NAN;
 
       bool use_stw = (use_stw_flag->get() >= 0.5f);
 
+      // --- Hydrodynamic load (STW) ---
       float stw_factor = 1.0f;
       if (use_stw && stw_knots) {
         float stw = stw_knots->get();
-        if (!std::isnan(stw) && stw > 0 && !stw_invalid(r, stw)) {
+        if (!std::isnan(stw) && stw > 0.0f && !stw_invalid(r, stw)) {
           stw_factor = clamp_val(baseSTW / stw, 1.0f, 2.5f);
         }
       }
 
+      // --- Aerodynamic load (wind) ---
       float wind_factor = 1.0f;
       if (aws_knots && awa_rad) {
         wind_factor = wind_load_factor(
-          aws_knots->get(), awa_rad->get()
+          aws_knots->get(),
+          awa_rad->get()
         );
       }
 
       float fuel = baseFuel * stw_factor * wind_factor;
-      if (!std::isnan(fuelMax)) fuel = std::min(fuel, fuelMax);
+
+      if (!std::isnan(fuelMax)) {
+        fuel = std::min(fuel, fuelMax);
+      }
 
       return clamp_val(fuel, 0.0f, 14.0f);
     })
   );
 
+  // -------------------------------------------------------------------------
+  // 2-second moving average (fuel & load inertia)
+  // -------------------------------------------------------------------------
+  auto* fuel_lph = fuel_lph_raw->connect_to(
+    new MovingAverage(2)
+  );
+
+  // Fuel → m³/s (Signal K)
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([](float lph){
       return std::isnan(lph) ? NAN : (lph / 1000.0f) / 3600.0f;
@@ -187,10 +231,11 @@ inline void setup_engine_performance(
     new SKOutputFloat("propulsion.engine.fuel.rate")
   );
 
+  // Engine load (% of rated)
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([=](float lph){
       float fmax = rated_fuel->get();
-      if (std::isnan(lph) || std::isnan(fmax)) return NAN;
+      if (std::isnan(lph) || std::isnan(fmax) || fmax <= 0.0f) return NAN;
       return clamp_val(lph / fmax, 0.0f, 1.0f);
     })
   )->connect_to(
