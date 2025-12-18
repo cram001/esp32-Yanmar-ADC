@@ -7,19 +7,19 @@ Also included are additional temp sensors, using inexpensive and waterproof OneW
 Currently the code base is designed for:
 
 - Yanmar 3JH3E engine (3800 RPM max)
-- American type (D) coolant temp sender 450-30 ohm (most Yanmars, except on Catalina, use European spec senders)
+- American type (D) coolant temp sender 450-30 ohm (most Yanmars, except on Catalina, use European spec senders, check your values!)
 - Engine RPM via ring gear magnetic pickup.
-- Calculates (estimates) fuel consumption based on user provided data
+- Calculates (estimates) fuel consumption, engine load based on user provided data. Corrects it based on wind, SOG, etc...
 
-Note: both the Engine RPM and coolant temp gaugues can remain at the helm, with no impact on accuracy.
+Note: both the Engine RPM and coolant temp gaugues must remain connected, with no impact on accuracy. If they fail, the digital values will not be usable.
 
 Based on SensESP and the FIrebeetle 2 ESP-E (4MB) device.
 
 Required hardware:
 
-- Victron Cerbo GX, with OS Large option installed (via firmware update page)
-- Cerbo GX NMEA 2000 adapter (can easily be built from a patch cord and N2k drop cable, don't connect the power wire)
-- DF Robot Firebeetle ESP32-E (4MB) .... 4 MB is min, 16 MB is recommended for future improvements. As of Dec 2025, 92% of the storage space is used if OTA (Over the Air) updates are required.
+- Victron Cerbo GX, with OS Large option installed (via firmware update page) (or Raspbery Pi with SignalK or Windows with SignalK Server)
+- NMEA 2000 - ethernet adapter if you want SignalK to send the data tor your chartplotter / instruments
+- DF Robot Firebeetle ESP32-E (16MB) .... 4 MB is min, 16 MB is recommended for future improvements. As of Dec 2025, 92% of the storage space is used if OTA (Over the Air) updates are required on the 4MB model.
   by disabling OTA and changing the partition table, more space can be made available on the 4MB unit
   - DF Robot Gravity IO Shield is highly recommended to faciliate connections (DFR0762)
 - Buck voltage converter, stable 5V output (DF Robot DFR1015)
@@ -35,7 +35,7 @@ Required hardware:
 -   Software protection: Code detects open circuit and emits NAN (see sender_resistance.h)
 -   Suggest sampling the coolant temp gauge voltage (sender pin to ground pin) at various temperatures to confirm your boat's voltage for the coolant temp sender...
 - To connect the mageteic pickup RPM sender to the ESP32, you will need an Op-Amp (LMV358), Opto Isolator and Capacitor 50V, 0.1uF
-- Other misc parts: project box, interconnect wires, etc..
+- Other misc parts: project box, interconnect wires, diode, capacitor to smooth data and protect inputs, etc..
 
 Memory Optimization:
 
@@ -48,7 +48,9 @@ The code includes conditional compilation flags to reduce flash usage:
 Future upgrades:
 
 - RPM off alternator
-- oil pressure sender
-- low oil pressure, high coolant temp sender alarms
+- oil pressure sender (code present, but not tested)
+- low oil pressure, high coolant temp sender alarms (easy to send to SignalK, but unkonwn if canboat.js can handle them to convert to N2K ?)
+
+Code is still in development (beta).... use at your own risk!
 
  
