@@ -469,11 +469,6 @@ void setup_coolant_sender() {
   sensesp_app->get_event_loop()->onRepeat(
       500,   // milliseconds
       [temp_C_avg, sk_coolant]() {
-
-        // If RPM sensor isn't up yet, treat as "engine off"
-        if (g_frequency == nullptr) {
-          sk_coolant->set_input(NAN);
-          return;
         }
 
         // g_frequency is rev/s, convert to RPM
