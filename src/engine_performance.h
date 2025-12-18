@@ -1,3 +1,8 @@
+// Calculates engine RPM based on magnetic flywheel sender input,
+// From Signal K, gets SOG, STW, AWS, AWA to compute engine load and fuel consumption
+// Estimates engine load and fuel flow, makes rough baseline corrections
+// for hull fouling and wind.
+
 #pragma once
 
 #include <cmath>
@@ -5,7 +10,7 @@
 #include <memory>
 #include <set>
 
-#include <Arduino.h>   // millis()
+#include <Arduino.h>
 
 #include <sensesp/system/valueproducer.h>
 #include <sensesp/transforms/curveinterpolator.h>
@@ -16,6 +21,13 @@
 using namespace sensesp;
 
 // ---------------------------------------------------------------------------
+// Compile-time debug guard
+// ---------------------------------------------------------------------------
+#ifndef ENABLE_DEBUG_OUTPUTS
+#define ENABLE_DEBUG_OUTPUTS 0
+#endif
+
+// ---------------------------------------------------------------------------
 // C++11-compatible clamp helper
 // ---------------------------------------------------------------------------
 template <typename T>
@@ -24,23 +36,23 @@ static inline T clamp_val(T v, T lo, T hi) {
 }
 
 // ============================================================================
-// BASELINE CURVES
+// BASELINE CURVES (RPM → STW, Fuel)
 // ============================================================================
 static std::set<CurveInterpolator::Sample> baseline_stw_curve = {
-  {500,  0.0}, {1000, 0.0}, {1800, 2.5}, {2000, 4.3},
+  {500, 0.0}, {1000, 0.0}, {1800, 2.5}, {2000, 4.3},
   {2400, 5.0}, {2800, 6.4}, {3200, 7.3},
   {3600, 7.45}, {3800, 7.6}, {3900, 7.6}
 };
 
 static std::set<CurveInterpolator::Sample> baseline_fuel_curve = {
-  {500,  0.6}, {1000, 0.75}, {1800, 1.95}, {2000, 2.3},
+  {500, 0.6}, {1000, 0.75}, {1800, 1.95}, {2000, 2.3},
   {2400, 2.45}, {2800, 2.7}, {3200, 3.4},
   {3600, 5.0}, {3800, 6.4}, {3900, 6.5}
 };
 
 static std::set<CurveInterpolator::Sample> rated_fuel_curve = {
-  {1800, 1.2}, {2000, 1.7}, {2400, 2.45},
-  {2800, 3.8}, {3200, 5.25}, {3600, 7.8}, {3800, 9.5}
+  {500, 0.9}, {1800, 1.2}, {2000, 1.7}, {2400, 2.45},
+  {2800, 3.8}, {3200, 5.25}, {3600, 7.8}, {3900, 9.6}
 };
 
 // ============================================================================
@@ -54,7 +66,8 @@ static inline bool stw_invalid(float rpm, float stw) {
 }
 
 // ============================================================================
-// WIND SPEED DERATING
+// WIND SPEED FACTOR
+// Positive = tailwind (speed gain), negative = headwind
 // ============================================================================
 static inline float wind_speed_factor(float aws_kn, float awa_rad) {
   if (std::isnan(aws_kn) || std::isnan(awa_rad)) return 0.0f;
@@ -86,7 +99,7 @@ static inline float wind_speed_factor(float aws_kn, float awa_rad) {
 }
 
 // ============================================================================
-// SETUP
+// SETUP — ENGINE PERFORMANCE
 // ============================================================================
 inline void setup_engine_performance(
   Frequency* rpm_source,
@@ -95,7 +108,8 @@ inline void setup_engine_performance(
   ValueProducer<float>* aws_knots,
   ValueProducer<float>* awa_rad
 ) {
-  if (baseline_fuel_curve.empty() ||
+  if (!rpm_source ||
+      baseline_fuel_curve.empty() ||
       baseline_stw_curve.empty() ||
       rated_fuel_curve.empty()) {
     return;
@@ -103,10 +117,9 @@ inline void setup_engine_performance(
 
   constexpr float RPM_MIN = 300.0f;
   constexpr float RPM_MAX = 4500.0f;
-
   constexpr float SPEED_MAX = 25.0f;
-  constexpr float FUEL_MAX_ABS = 12.0f;
-  constexpr float LOAD_MAX = 1.2f;
+  constexpr float FUEL_MAX_ABS = 14.0f;
+  constexpr float LOAD_MAX = 1.0f;
 
   auto* rpm = rpm_source->connect_to(
     new LambdaTransform<float, float>([](float rps) {
@@ -124,8 +137,14 @@ inline void setup_engine_performance(
   rpm->connect_to(base_fuel);
   rpm->connect_to(rated_fuel);
 
+#if ENABLE_DEBUG_OUTPUTS
+  base_fuel->connect_to(new SKOutputFloat("debug.engine.baselineFuel"));
+  base_stw->connect_to(new SKOutputFloat("debug.engine.baselineSTW"));
+#endif
+
   auto* fuel_lph = rpm->connect_to(
     new LambdaTransform<float, float>([=](float r) {
+
       float baseFuel = base_fuel->get();
       float baseSTW  = base_stw->get();
       float fuelMax  = rated_fuel->get();
@@ -147,16 +166,30 @@ inline void setup_engine_performance(
           spd = sog;
       }
 
+      float windFactor = 0.0f;
       float expectedSTW = baseSTW;
+
       if (aws_knots && awa_rad) {
         float aws = aws_knots->get();
         float awa = awa_rad->get();
         if (!std::isnan(aws) && !std::isnan(awa)) {
-          float wf = wind_speed_factor(aws, awa);
-          wf = clamp_val(wf, -0.4f, 0.1f);
-          expectedSTW *= (1.0f + wf);
+          windFactor = clamp_val(
+            wind_speed_factor(aws, awa), -0.4f, 0.1f
+          );
+          expectedSTW *= (1.0f + windFactor);
         }
       }
+
+#if ENABLE_DEBUG_OUTPUTS
+      static float dbg_expectedSTW;
+      static float dbg_actualSpeed;
+      static float dbg_windFactor;
+      static float dbg_fuelScale;
+
+      dbg_expectedSTW = expectedSTW;
+      dbg_actualSpeed = spd;
+      dbg_windFactor  = windFactor;
+#endif
 
       float fuel = (std::isnan(spd) || spd <= 0.0f || expectedSTW <= 0.0f)
                      ? baseFuel
@@ -165,9 +198,17 @@ inline void setup_engine_performance(
       if (!std::isnan(fuelMax))
         fuel = (fuel > fuelMax) ? fuelMax : fuel;
 
+#if ENABLE_DEBUG_OUTPUTS
+      dbg_fuelScale = fuel / baseFuel;
+#endif
+
       return clamp_val(fuel, 0.0f, FUEL_MAX_ABS);
     })
   );
+
+#if ENABLE_DEBUG_OUTPUTS
+  fuel_lph->connect_to(new SKOutputFloat("debug.engine.fuelScale"));
+#endif
 
   fuel_lph->connect_to(
     new LambdaTransform<float, float>([](float lph) {
