@@ -8,6 +8,11 @@
 using namespace sensesp;
 using namespace sensesp::onewire;
 
+extern float temp_elbow_c;
+extern float temp_compartment_c;
+extern float temp_alternator_c;
+
+
 // These are provided by main.cpp
 extern const uint8_t PIN_TEMP_COMPARTMENT;
 extern const uint8_t PIN_TEMP_EXHAUST;
@@ -55,6 +60,18 @@ inline void setup_temperature_sensors() {
       ->set_title("Engine Room SK Path")
       ->set_sort_order(130);
 
+auto* tap_engine = new LambdaTransform<float, float>(
+  [](float v) {
+    temp_compartment_c = v;
+    return v;
+  }
+);
+
+t1->connect_to(t1_linear)
+   ->connect_to(tap_engine)
+   ->connect_to(sk_engine);
+
+
   // ========================= EXHAUST ==============================
 
   auto* t2 = new OneWireTemperature(
@@ -92,7 +109,21 @@ inline void setup_temperature_sensors() {
       ->set_title("Exhaust elbow SK Path")
       ->set_sort_order(202);
 
-  // ========================= ALTERNATOR ==============================
+auto* tap_exhaust = new LambdaTransform<float, float>(
+  [](float v) {
+    temp_elbow_c = v;
+    return v;
+  }
+);
+
+t2->connect_to(t2_linear)
+   ->connect_to(tap_exhaust)
+   ->connect_to(sk_exhaust);
+
+tap_exhaust->connect_to(sk_exhaust_i70);
+
+
+      // ========================= ALTERNATOR ==============================
 
   auto* t3 = new OneWireTemperature(
       s3, ONEWIRE_READ_DELAY_MS,
@@ -122,4 +153,16 @@ inline void setup_temperature_sensors() {
   ConfigItem(sk_alt)
       ->set_title("Alternator SK Path")
       ->set_sort_order(302);
-}
+
+auto* tap_alt = new LambdaTransform<float, float>(
+  [](float v) {
+    temp_alternator_c = v;
+    return v;
+  }
+);
+
+t3->connect_to(t3_linear)
+   ->connect_to(tap_alt)
+   ->connect_to(sk_alt);
+
+    }
