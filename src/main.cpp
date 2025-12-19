@@ -158,13 +158,16 @@ float rpm_adc_hz = NAN;
 float engine_rpm = NAN;
 
 // OneWire temps
-float temp_elbow_c       = NAN;
-float temp_compartment_c = NAN;
-float temp_alternator_c  = NAN;
+// NOTE: Status page suppresses NaN/Inf. Initialize to finite values so
+// fields render immediately and then update live.
+float temp_elbow_c       = 0.0f;
+float temp_compartment_c = 0.0f;
+float temp_alternator_c  = 0.0f;
+
 
 // Engine performance
-float fuel_flow_lph   = NAN;
-float engine_load_pct = NAN;
+float fuel_flow_lph   = 0.0f;
+float engine_load_pct = 0.0f;
 
 // ============================================================================
 // SETUP
@@ -272,20 +275,6 @@ void setup() {
                             "Engine",
                             20);
 
-  new StatusPageItem<float>("Exhaust Elbow (°C)",
-                            temp_elbow_c,
-                            "OneWire Temperatures",
-                            10);
-
-  new StatusPageItem<float>("Engine Compartment (°C)",
-                            temp_compartment_c,
-                            "OneWire Temperatures",
-                            20);
-
-  new StatusPageItem<float>("Alternator (°C)",
-                            temp_alternator_c,
-                            "OneWire Temperatures",
-                            30);
 
   new StatusPageItem<float>("Fuel Flow (L/hr)",
                             fuel_flow_lph,

@@ -20,6 +20,7 @@
 #include <sensesp/transforms/lambda_transform.h>   // Used to "tap" values
 #include <sensesp/signalk/signalk_output.h>
 #include <sensesp/ui/config_item.h>
+#include "sensesp/ui/status_page_item.h"
 
 using namespace sensesp;
 using namespace sensesp::onewire;
@@ -81,6 +82,14 @@ inline void setup_temperature_sensors() {
     }
   );
 
+  auto* ui_engine = new StatusPageItem<float>(
+      "Engine Compartment (°C)",
+      0.0f,
+      "OneWire Temperatures",
+      20
+  );
+
+
   // Signal K output
   auto* sk_engine = new SKOutputFloat(
       "environment.inside.engineRoom.temperature",
@@ -91,6 +100,7 @@ inline void setup_temperature_sensors() {
   //   DS18B20 → calibration → tap → Signal K
   t1->connect_to(t1_linear)
      ->connect_to(tap_engine)
+     ->connect_to(ui_engine)
      ->connect_to(sk_engine);
 
   // Configuration UI entries
@@ -130,6 +140,14 @@ inline void setup_temperature_sensors() {
     }
   );
 
+  auto* ui_exhaust = new StatusPageItem<float>(
+      "Exhaust Elbow (°C)",
+      0.0f,
+      "OneWire Temperatures",
+      10
+  );
+
+
   // Primary Signal K path
   auto* sk_exhaust = new SKOutputFloat(
       "propulsion.engine.exhaustTemperature",
@@ -145,10 +163,13 @@ inline void setup_temperature_sensors() {
   // Main pipeline
   t2->connect_to(t2_linear)
      ->connect_to(tap_exhaust)
+     ->connect_to(ui_exhaust)
      ->connect_to(sk_exhaust);
 
+
   // Fan-out AFTER the tap so both SK paths see identical values
-  tap_exhaust->connect_to(sk_exhaust_i70);
+  ui_exhaust->connect_to(sk_exhaust_i70);
+
 
   ConfigItem(t2)
       ->set_title("Exhaust elbow DS18B20")
@@ -185,6 +206,14 @@ inline void setup_temperature_sensors() {
     }
   );
 
+  auto* ui_alt = new StatusPageItem<float>(
+      "Alternator (°C)",
+      0.0f,
+      "OneWire Temperatures",
+      30
+  );
+
+
   auto* sk_alt = new SKOutputFloat(
       "electrical.alternators.main.temperature",
       "/config/outputs/sk/alternator_temp"
@@ -192,7 +221,9 @@ inline void setup_temperature_sensors() {
 
   t3->connect_to(t3_linear)
      ->connect_to(tap_alt)
+     ->connect_to(ui_alt)
      ->connect_to(sk_alt);
+
 
   ConfigItem(t3)
       ->set_title("Alternator DS18B20")
