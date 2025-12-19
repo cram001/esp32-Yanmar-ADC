@@ -44,13 +44,16 @@ inline void setup_temperature_sensors() {
 
   ConfigItem(t1)
       ->set_title("Engine Room DS18B20")
-      ->set_description("Temperature of the engine compartment");
+      ->set_description("Temperature of the engine compartment")
+      ->set_sort_order(110);
 
   ConfigItem(t1_linear)
-      ->set_title("Engine Room DS18B20 calibration");
+      ->set_title("Engine Room DS18B20 calibration")
+      ->set_sort_order(120);
 
   ConfigItem(sk_engine)
-      ->set_title("Engine Room SK Path");
+      ->set_title("Engine Room SK Path")
+      ->set_sort_order(130);
 
   // ========================= EXHAUST ==============================
 
@@ -78,7 +81,16 @@ inline void setup_temperature_sensors() {
   t2->connect_to(t2_linear)->connect_to(sk_exhaust);
 
   ConfigItem(t2)
-      ->set_title("Exhaust DS18B20");
+      ->set_title("Exhaust elbow DS18B20")
+      ->set_sort_order(200);
+
+    ConfigItem(t2_linear)
+      ->set_title("Exhaust elbow DS18B20 calibration")
+      ->set_sort_order(201);
+
+  ConfigItem(sk_exhaust)
+      ->set_title("Exhaust elbow SK Path")
+      ->set_sort_order(202);
 
   // ========================= ALTERNATOR ==============================
 
@@ -100,5 +112,14 @@ inline void setup_temperature_sensors() {
   t3->connect_to(t3_linear)->connect_to(sk_alt);
 
   ConfigItem(t3)
-      ->set_title("Alternator DS18B20");
+      ->set_title("Alternator DS18B20")
+      ->set_sort_order(300);
+
+    ConfigItem(t3_linear)
+      ->set_title("Alternator DS18B20 calibration")
+      ->set_sort_order(301);
+
+  ConfigItem(sk_alt)
+      ->set_title("Alternator SK Path")
+      ->set_sort_order(302);
 }

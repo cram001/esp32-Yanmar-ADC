@@ -132,6 +132,9 @@ void setup() {
   setupCoolantSimulator();
 #endif
 
+
+
+
   SetupLogging();
 
   SensESPAppBuilder builder;
@@ -142,62 +145,8 @@ void setup() {
       ->set_sk_server("192.168.88.99", 3000);
 
   sensesp_app = builder.get_app();
-  sensesp_app->start();
 
-  // ========================================================================
-  // STATUS PAGE (SensESP v3.1.0)
-  // URL: http://<esp32-ip>/status
-  // ========================================================================
-
-  // ---- Coolant ------------------------------------------------------------
-  new StatusPageItem<float>("ADC Voltage (V)",
-                            coolant_adc_volts,
-                            "Coolant",
-                            10);
-
-  new StatusPageItem<float>("Coolant Temp (°C)",
-                            coolant_temp_c,
-                            "Coolant",
-                            20);
-
-  // ---- Engine Speed -------------------------------------------------------
-  new StatusPageItem<float>("RPM Input Frequency (Hz)",
-                            rpm_adc_hz,
-                            "Engine",
-                            10);
-
-  new StatusPageItem<float>("Engine RPM",
-                            engine_rpm,
-                            "Engine",
-                            20);
-
-  // ---- Temperatures -------------------------------------------------------
-  new StatusPageItem<float>("Exhaust Elbow (°C)",
-                            temp_elbow_c,
-                            "OneWire Temperatures",
-                            10);
-
-  new StatusPageItem<float>("Engine Compartment (°C)",
-                            temp_compartment_c,
-                            "OneWire Temperatures",
-                            20);
-
-  new StatusPageItem<float>("Alternator (°C)",
-                            temp_alternator_c,
-                            "OneWire Temperatures",
-                            30);
-
-  // ---- Engine Performance -------------------------------------------------
-  new StatusPageItem<float>("Fuel Flow (L/hr)",
-                            fuel_flow_lph,
-                            "Engine",
-                            10);
-
-  new StatusPageItem<float>("Engine Load (%)",
-                            engine_load_pct,
-                            "Engine",
-                            20);
-
+  
   // ========================================================================
   // Engine performance inputs from SK (Signal K paths)
   /* 
@@ -259,6 +208,64 @@ environment.wind.angleApparent	radians	Signed, vessel-relative
       aws,
       awa
   );
+
+  sensesp_app->start();
+
+  // ========================================================================
+  // STATUS PAGE (SensESP v3.1.0)
+  // URL: http://<esp32-ip>/status
+  // ========================================================================
+
+  // ---- Coolant ------------------------------------------------------------
+  new StatusPageItem<float>("ADC Voltage (V)",
+                            coolant_adc_volts,
+                            "Coolant",
+                            10);
+
+  new StatusPageItem<float>("Coolant Temp (°C)",
+                            coolant_temp_c,
+                            "Coolant",
+                            20);
+
+  // ---- Engine Speed -------------------------------------------------------
+  new StatusPageItem<float>("RPM Input Frequency (Hz)",
+                            rpm_adc_hz,
+                            "Engine",
+                            10);
+
+  new StatusPageItem<float>("Engine RPM",
+                            engine_rpm,
+                            "Engine",
+                            20);
+
+  // ---- Temperatures -------------------------------------------------------
+  new StatusPageItem<float>("Exhaust Elbow (°C)",
+                            temp_elbow_c,
+                            "OneWire Temperatures",
+                            10);
+
+  new StatusPageItem<float>("Engine Compartment (°C)",
+                            temp_compartment_c,
+                            "OneWire Temperatures",
+                            20);
+
+  new StatusPageItem<float>("Alternator (°C)",
+                            temp_alternator_c,
+                            "OneWire Temperatures",
+                            30);
+
+  // ---- Engine Performance -------------------------------------------------
+  new StatusPageItem<float>("Fuel Flow (L/hr)",
+                            fuel_flow_lph,
+                            "Engine",
+                            10);
+
+  new StatusPageItem<float>("Engine Load (%)",
+                            engine_load_pct,
+                            "Engine",
+                            20);
+
+  
 }
 
 // ============================================================================
@@ -294,7 +301,9 @@ void setup_engine_hours() {
   ConfigItem(sk_hours)
       ->set_title("Engine Run Time SK Path")
       ->set_description("Signal K path for engine runtime (seconds)");
-}
+
+
+    }
 
 // ============================================================================
 // LOOP

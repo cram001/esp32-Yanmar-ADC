@@ -1,198 +1,52 @@
-// ============================================================================
-// ENGINE LOAD & FUEL FLOW ESTIMATION — DESIGN NOTES
-// ============================================================================
-//
-// This module estimates ENGINE LOAD and FUEL FLOW for a displacement sailboat
-// using a mechanically governed marine diesel (Yanmar 3JH3E class).
-//
-// IMPORTANT:
-// ----------
-// This code models *boat demand*, NOT engine capability.
-// It intentionally does NOT mirror the Yanmar brochure curves except at
-// true full-load conditions.
-//
-// ---------------------------------------------------------------------------
-// CORE PHYSICAL INVARIANTS (DO NOT BREAK THESE)
-// ---------------------------------------------------------------------------
-//
-// 1) RPM DOES NOT DEFINE POWER
-//    -------------------------
-//    On a marine diesel, RPM alone does NOT determine power output.
-//    Power is proportional to TORQUE × RPM.
-//    Torque is governed by propeller absorption and hull resistance.
-//
-//    At most cruising RPMs (e.g. 2400–3000), the engine is PROP-LIMITED,
-//    not fuel-limited. The fuel rack is only partially open.
-//
-//
-// 2) REDUCED STW AT CONSTANT RPM ⇒ INCREASED LOAD
-//    --------------------------------------------
-//    For a given RPM, the propeller expects a certain Speed-Through-Water (STW).
-//    If actual STW is LOWER than baseline, torque demand rises and fuel increases.
-//
-//    This is the single strongest and most reliable indicator of load.
-//
-//
-// 3) CURRENT (SOG − STW) HAS NO DIRECT EFFECT ON ENGINE LOAD
-//    -------------------------------------------------------
-//    Current affects SOG but does NOT change propeller load.
-//    Engine load MUST be derived from STW, not SOG.
-//
-//    SOG is used ONLY as a fallback when STW is unavailable or disabled.
-//
-//
-// 4) WIND INCREASES LOAD — ASYMMETRICALLY
-//    ------------------------------------
-//    Apparent wind increases resistance through:
-//      - Aerodynamic drag (rig, mast, cabin, dodger)
-//      - Induced waves
-//      - Pitching and prop ventilation
-//      - Increased hull resistance
-//
-//    Effects are intentionally asymmetric:
-//      - Headwind: strong penalty
-//      - Crosswind: moderate penalty
-//      - Tailwind: mild benefit (never cancels STW loss)
-//
-//    Wind effects are ignored below ~7 knots apparent.
-//
-//
-// 5) WIND NEVER "EXCUSES" LOSS OF STW
-//    --------------------------------
-//    A reduction in STW ALWAYS increases load.
-//    Wind modifies load ON TOP of STW loss; it never reduces load when STW drops.
-//
-//
-// 6) OPERATOR MAY DISABLE STW IF SENSOR IS UNTRUSTED
-//    -----------------------------------------------
-//    STW sensors foul easily.
-//    When STW is disabled via config, load is estimated from RPM and wind only.
-//    This prevents massive overestimation due to bad STW data.
-//
-//
-// ---------------------------------------------------------------------------
-// ENGINE-LIMITED vs PROP-LIMITED REGIMES
-// ---------------------------------------------------------------------------
-//
-// - PROP-LIMITED (most of the time):
-//     • RPM rises freely
-//     • Fuel < rated curve
-//     • Load < 100%
-//
-// - ENGINE-LIMITED (heavy weather, towing, waves):
-//     • RPM caps below rated
-//     • Fuel approaches rated curve
-//     • Load → 100%
-//
-// The code naturally transitions between these regimes by observing STW loss
-// and RPM behavior — no hard mode switching is used.
-//
-//
-// ---------------------------------------------------------------------------
-// YANMAR PERFORMANCE CURVES — HOW THEY ARE USED
-// ---------------------------------------------------------------------------
-//
-// Yanmar fuel and power curves represent ENGINE CAPABILITY under standardized
-// full-load conditions.
-//
-// They are used here ONLY as:
-//   • Baseline fuel at light load
-//   • Maximum allowable fuel at a given RPM
-//
-// They are NOT used to force fuel or load at cruising RPMs.
-//
-// Example:
-//   At 2800 RPM, brochure power ≈ 25 kW,
-//   but the boat typically requires only ~9–12 kW.
-//   The app intentionally reports the LOWER value.
-//
-//
-// ---------------------------------------------------------------------------
-// EXPECTED REAL-WORLD BEHAVIOR (REFERENCE CASES @ 2800 RPM)
-// ---------------------------------------------------------------------------
-//
-// Baseline (calm water):
-//   STW ≈ 6.4 kt → Fuel ≈ 2.7 L/hr, Load ≈ 70%
-//
-// Towing dinghy:
-//   STW ≈ 6.0 kt → Fuel ≈ 2.8 L/hr, Load ↑ slightly
-//
-// Strong current only:
-//   STW ≈ 6.4 kt, SOG ≈ 4.6 kt → Load unchanged
-//
-// Strong headwind (15–30 kt):
-//   STW ↓↓↓ → Fuel ↑↑, Load → 100%
-//
-// Fouled STW sensor:
-//   Disable STW → Fuel returns near baseline
-//
-//
-// ---------------------------------------------------------------------------
-// IMPORTANT WARNING TO FUTURE MAINTAINERS
-// ---------------------------------------------------------------------------
-//
-// If you "fix" this code to:
-//   • match brochure power at cruising RPM
-//   • tie fuel directly to RPM
-//   • use SOG to compute load
-//
-// You will make the results *less* accurate.
-//
-// The current behavior is intentional and validated against:
-//   • real boat measurements
-//   • propeller physics
-//   • marine diesel governor behavior
-//
-// If you change the logic, revalidate against logged real-world data.
-//
-// ============================================================================
-
-
-
-//
-// Core invariants:
-//
-//  1) Reduced STW at a given RPM increases engine load (when STW is trusted).
-//  2) Current (SOG–STW delta) has NO direct effect on engine load.
-//  3) Apparent wind adds aerodynamic drag (head > cross).
-//  4) Tailwind helps, but never offsets hydrodynamic losses.
-//  5) Wind effects ignored below ~7 kn apparent.
-//  6) Operator may disable STW usage if sensor is unreliable.
-//  7) Fuel and load are smoothed (2 s moving average).
-//
-// ---------------------------------------------------------------------------
-// REUSABLE TEST CASES (RPM = 2800)
-//
-// Baseline:
-//   STW 6.4, 0 wind:  → Fuel ≈ 2.7 L/hr, Load ≈ 0.71
-//
-// Towing dinghy:
-//   STW 6.0, 0 wind:   → Fuel ≈ 2.8 L/hr
-//
-// Fouled STW sensor (override = 0): (user can overide use of STW via UI)
-//   STW 3.6, 0 wind, SOG 6.4 kts    → Fuel ≈ baseline
-//
-// Strong headwind:
-//   STW 3.5, AWS 30 from ahead    → Load (fuel consumption) ≈ 100%
-//
-// ============================================================================
-
 #pragma once
+
+// ============================================================================
+// ENGINE LOAD & FUEL FLOW ESTIMATION
+// ============================================================================
+//
+// STW enable/disable is implemented using a Linear transform as a config carrier.
+// This is REQUIRED for SensESP v3.1.0.
+//
+// We feed a constant value (1.0) into the Linear transform via a LambdaTransform.
+// The RPM input is used only to trigger updates.
+//
+//   output = multiplier * 1.0 + offset
+//
+// Interpretation:
+//   output >= 0.5  → STW USED
+//   output <  0.5  → STW IGNORED
+//
+// ============================================================================
 
 #include <cmath>
 #include <set>
-
 #include <Arduino.h>
 
 #include <sensesp/system/valueproducer.h>
-#include <sensesp/signalk/signalk_value_listener.h>
+#include <sensesp/ui/config_item.h>
+#include <sensesp/ui/status_page_item.h>
+
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
 #include <sensesp/transforms/frequency.h>
 #include <sensesp/transforms/moving_average.h>
+#include <sensesp/transforms/linear.h>
+
 #include <sensesp/signalk/signalk_output.h>
 
 using namespace sensesp;
+
+float stw_ignored_flag = NAN;  // 1 = ignored, 0 = used
+
+
+// ============================================================================
+// CONFIG CARRIER — USE STW FLAG
+// ============================================================================
+
+static Linear* use_stw_cfg = nullptr;
+
+// Status page backing variable
+static float stw_ignored_status = NAN;
 
 // ---------------------------------------------------------------------------
 // Clamp helper
@@ -233,7 +87,7 @@ static inline bool stw_invalid(float rpm, float stw) {
 }
 
 // ============================================================================
-// WIND LOAD MULTIPLIER (ASYMMETRIC)
+// WIND LOAD MULTIPLIER
 // ============================================================================
 static inline float wind_load_factor(float aws, float awa) {
 
@@ -246,20 +100,19 @@ static inline float wind_load_factor(float aws, float awa) {
   float angle = clamp_val(fabsf(awa), 0.0f, PI_F);
   float aws_c = clamp_val(aws, 7.0f, 30.0f);
 
-  float head  =  cosf(angle);   // +1 headwind, -1 tailwind
-  float cross =  sinf(angle);   // 0..1 crosswind
+  float head  = cosf(angle);
+  float cross = sinf(angle);
 
   float strength = (aws_c - 7.0f) / 23.0f;
-
   float penalty = 0.0f;
 
   if (head > 0.0f) {
-    penalty += strength * head * 0.30f;   // headwind
+    penalty += strength * head * 0.30f;
   } else {
-    penalty += strength * head * 0.12f;   // tailwind (limited relief)
+    penalty += strength * head * 0.12f;
   }
 
-  penalty += strength * cross * 0.18f;    // crosswind drag
+  penalty += strength * cross * 0.18f;
 
   return clamp_val(1.0f + penalty, 0.90f, 1.45f);
 }
@@ -279,13 +132,34 @@ inline void setup_engine_performance(
   if (!rpm_source) return;
 
   // -------------------------------------------------------------------------
-  // STW enable flag from Signal K (1 = use STW, 0 = ignore)
+  // CONFIGURATION UI (REGISTER ONCE)
   // -------------------------------------------------------------------------
-  auto* use_stw_flag = new SKValueListener<float>(
-    "config.engine.useStw",
-    1000,
-    "/config/engine/use_stw"
-  );
+  static bool cfg_registered = false;
+  if (!cfg_registered) {
+
+    // Linear used ONLY as config carrier
+    use_stw_cfg = new Linear(
+      1.0f,   // multiplier (1 = use STW)
+      0.0f,   // offset
+      "/config/engine/use_stw"
+    );
+
+    ConfigItem(use_stw_cfg)
+      ->set_title("Use STW for engine performance")
+      ->set_description("Output >= 0.5 = use STW, < 0.5 = ignore STW")
+      ->set_sort_order(90);
+
+    extern float stw_ignored_flag;
+    
+    new StatusPageItem<float>(
+      "STW Ignored (1=yes, 0=no)",
+      stw_ignored_flag,
+      "Engine",
+      30
+    );
+
+    cfg_registered = true;
+  }
 
   // -------------------------------------------------------------------------
   // RPM (rps → rpm)
@@ -297,6 +171,13 @@ inline void setup_engine_performance(
     })
   );
 
+  // Feed constant 1.0 into the Linear config carrier
+  rpm->connect_to(
+    new LambdaTransform<float,float>([](float /*rpm*/){
+      return 1.0f;
+    })
+  )->connect_to(use_stw_cfg);
+
   auto* base_stw   = new CurveInterpolator(&baseline_stw_curve);
   auto* base_fuel  = new CurveInterpolator(&baseline_fuel_curve);
   auto* rated_fuel = new CurveInterpolator(&rated_fuel_curve);
@@ -306,7 +187,7 @@ inline void setup_engine_performance(
   rpm->connect_to(rated_fuel);
 
   // -------------------------------------------------------------------------
-  // Fuel flow calculation (L/hr)
+  // FUEL FLOW CALCULATION
   // -------------------------------------------------------------------------
   auto* fuel_lph_raw = rpm->connect_to(
     new LambdaTransform<float,float>([=](float r){
@@ -317,27 +198,24 @@ inline void setup_engine_performance(
 
       if (std::isnan(baseFuel) || baseFuel <= 0.0f) return NAN;
 
-      bool use_stw = (use_stw_flag->get() >= 0.5f);
+      bool use_stw = (use_stw_cfg->get() >= 0.5f);
+      // expose status-friendly value
+      stw_ignored_flag = use_stw ? 0.0f : 1.0f;
+      stw_ignored_status = use_stw ? 0.0f : 1.0f;
 
-      // --- Hydrodynamic load (STW) ---
       float stw_factor = 1.0f;
 
       if (use_stw && stw_knots) {
         float stw = stw_knots->get();
         if (!std::isnan(stw) && stw > 0.0f && !stw_invalid(r, stw)) {
-
           float ratio = baseSTW / stw;
-
-          // 5% deadband: ignore small STW variations
           if (ratio >= 1.05f) {
-            // softened STW sensitivity (power law)
             stw_factor = powf(ratio, 0.6f);
             stw_factor = clamp_val(stw_factor, 1.0f, 2.0f);
           }
         }
       }
 
-      // --- Aerodynamic load (wind) ---
       float wind_factor = 1.0f;
       if (aws_knots && awa_rad) {
         wind_factor = wind_load_factor(
@@ -357,13 +235,11 @@ inline void setup_engine_performance(
   );
 
   // -------------------------------------------------------------------------
-  // 2-second moving average
+  // SMOOTHING
   // -------------------------------------------------------------------------
-  auto* fuel_lph = fuel_lph_raw->connect_to(
-    new MovingAverage(2)
-  );
+  auto* fuel_lph = fuel_lph_raw->connect_to(new MovingAverage(2));
 
-  // Fuel → m³/s (Signal K)
+  // Fuel → m³/s
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([](float lph){
       return std::isnan(lph) ? NAN : (lph / 1000.0f) / 3600.0f;
@@ -372,7 +248,7 @@ inline void setup_engine_performance(
     new SKOutputFloat("propulsion.engine.fuel.rate")
   );
 
-  // Engine load (% of rated)
+  // Engine load (%)
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([=](float lph){
       float fmax = rated_fuel->get();
