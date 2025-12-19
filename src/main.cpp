@@ -143,6 +143,26 @@ const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 Frequency* g_frequency = nullptr;
 
 // ---------------------------------------------------------------------------
+// STATUS PAGE UI OUTPUT OBJECTS
+// (must persist for lifetime of application)
+// ---------------------------------------------------------------------------
+
+StatusPageItem<float>* ui_coolant_adc_volts = nullptr;
+StatusPageItem<float>* ui_coolant_temp_c    = nullptr;
+
+StatusPageItem<float>* ui_rpm_hz            = nullptr;
+StatusPageItem<float>* ui_rpm               = nullptr;
+
+StatusPageItem<float>* ui_oil_adc_volts     = nullptr;
+StatusPageItem<float>* ui_oil_pressure_psi  = nullptr;
+
+StatusPageItem<float>* ui_fuel_flow_lph     = nullptr;
+StatusPageItem<float>* ui_engine_load_pct   = nullptr;
+StatusPageItem<float>* ui_engine_hours      = nullptr;
+StatusPageItem<float>* ui_stw_ignored      = nullptr;
+
+
+// ---------------------------------------------------------------------------
 // STATUS PAGE BACKING VARIABLES
 // (updated inside modules via `extern`)
 // ---------------------------------------------------------------------------
@@ -255,14 +275,16 @@ void setup() {
   // Reads referenced variables at render time
   // ========================================================================
 
-  new StatusPageItem<float>("ADC Voltage (V)",
-                            coolant_adc_volts,
-                            "Coolant",
+ui_coolant_adc_volts =
+    new StatusPageItem<float>("ADC Voltage (V)", 
+                            0.0f,
+                            "Coolant", 
                             10);
 
-  new StatusPageItem<float>("Coolant Temp (°C)",
-                            coolant_temp_c,
-                            "Coolant",
+ui_coolant_temp_c =
+    new StatusPageItem<float>("Coolant Temp (°C)", 
+                            0.0f, 
+                            "Coolant", 
                             20);
 
   new StatusPageItem<float>("RPM Input Frequency (Hz)",
@@ -296,19 +318,32 @@ void setup_engine_hours() {
 
   auto* hours = new EngineHours("/config/sensors/engine_hours");
 
-  auto* hours_to_seconds = hours->connect_to(
-      new Linear(3600.0f, 0.0f)
-  );
+auto* hours_to_seconds = hours->connect_to(
+    new Linear(3600.0f, 0.0f)
+);
 
-  auto* sk_hours = new SKOutputFloat(
-      "propulsion.engine.runTime"
-  );
+// ---------------------------------------------------------------------------
+// STATUS PAGE — Engine Hours (hours)
+// ---------------------------------------------------------------------------
+ui_engine_hours = new StatusPageItem<float>(
+    "Engine Hours",
+    0.0f,
+    "Engine",
+    50
+);
 
-  if (g_frequency != nullptr) {
-    g_frequency->connect_to(hours);
-  }
+// Insert StatusPageItem into the pipeline
+hours->connect_to(ui_engine_hours);
 
-  hours_to_seconds->connect_to(sk_hours);
+// ---------------------------------------------------------------------------
+// SIGNAL K — Engine runtime (seconds)
+// ---------------------------------------------------------------------------
+auto* sk_hours = new SKOutputFloat(
+    "propulsion.engine.runTime"
+);
+
+hours_to_seconds->connect_to(sk_hours);
+
 }
 
 // ============================================================================

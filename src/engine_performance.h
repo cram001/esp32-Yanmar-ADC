@@ -37,7 +37,15 @@
 using namespace sensesp;
 
 float stw_ignored_flag = NAN;  // 1 = ignored, 0 = used
+extern StatusPageItem<float>* ui_stw_ignored;
 
+
+// -----------------------------------------------------------------------------
+// Status page UI outputs (defined in main.cpp)
+// -----------------------------------------------------------------------------
+extern StatusPageItem<float>* ui_fuel_flow_lph;
+extern StatusPageItem<float>* ui_engine_load_pct;
+extern StatusPageItem<float>* ui_stw_ignored;
 
 // ============================================================================
 // CONFIG CARRIER — USE STW FLAG
@@ -151,12 +159,13 @@ inline void setup_engine_performance(
 
     extern float stw_ignored_flag;
     
-    new StatusPageItem<float>(
-      "STW Ignored (1=yes, 0=no)",
-      stw_ignored_flag,
-      "Engine",
-      30
-    );
+  ui_stw_ignored = new StatusPageItem<float>(
+  "STW Ignored (1=yes, 0=no)",
+  0.0f,
+  "Engine",
+  35
+);
+
 
     cfg_registered = true;
   }
@@ -201,7 +210,9 @@ inline void setup_engine_performance(
       bool use_stw = (use_stw_cfg->get() >= 0.5f);
       // expose status-friendly value
       stw_ignored_flag = use_stw ? 0.0f : 1.0f;
-      stw_ignored_status = use_stw ? 0.0f : 1.0f;
+      if (ui_stw_ignored) {
+         ui_stw_ignored->set(use_stw ? 0.0f : 1.0f);
+}
 
       float stw_factor = 1.0f;
 
@@ -239,6 +250,22 @@ inline void setup_engine_performance(
   // -------------------------------------------------------------------------
   auto* fuel_lph = fuel_lph_raw->connect_to(new MovingAverage(2));
 
+
+// ---------------------------------------------------------------------------
+// STATUS PAGE — Fuel flow (L/hr)
+// ---------------------------------------------------------------------------
+  ui_fuel_flow_lph = new StatusPageItem<float>(
+    "Fuel Flow (L/hr)",
+    0.0f,
+    "Engine",
+    30
+  );
+
+  // Insert into pipeline
+  fuel_lph->connect_to(ui_fuel_flow_lph);
+
+
+  
   // Fuel → m³/s
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([](float lph){
@@ -248,14 +275,45 @@ inline void setup_engine_performance(
     new SKOutputFloat("propulsion.engine.fuel.rate")
   );
 
+
+
   // Engine load (%)
-  fuel_lph->connect_to(
-    new LambdaTransform<float,float>([=](float lph){
-      float fmax = rated_fuel->get();
-      if (std::isnan(lph) || std::isnan(fmax) || fmax <= 0.0f) return NAN;
-      return clamp_val(lph / fmax, 0.0f, 1.0f);
-    })
-  )->connect_to(
-    new SKOutputFloat("propulsion.engine.load")
-  );
+  
+
+  auto* engine_load = fuel_lph->connect_to(
+  new LambdaTransform<float,float>([=](float lph){
+    float fmax = rated_fuel->get();
+    if (std::isnan(lph) || std::isnan(fmax) || fmax <= 0.0f) return NAN;
+    return clamp_val(lph / fmax, 0.0f, 1.0f);
+  })
+);
+
+// ---------------------------------------------------------------------------
+// STATUS PAGE — Engine load (%)
+// ---------------------------------------------------------------------------
+ui_engine_load_pct = new StatusPageItem<float>(
+  "Engine Load (%)",
+  0.0f,
+  "Engine",
+  40
+);
+
+// Convert fraction → percent for UI
+engine_load->connect_to(
+  new LambdaTransform<float,float>([](float frac){
+    float pct = std::isnan(frac) ? NAN : frac * 100.0f;
+    if (ui_engine_load_pct) {
+      ui_engine_load_pct->set(pct);
+    }
+    return frac;
+  })
+);
+
+// Signal K (fraction 0–1)
+engine_load->connect_to(
+  new SKOutputFloat("propulsion.engine.load")
+);
+
+
+  
 }
