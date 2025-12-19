@@ -1,6 +1,47 @@
 // ============================================================================
 // Yanmar Diesel Engine Monitoring - SensESP v3.1.0
 // ============================================================================
+// Features:
+//  - Engine Coolant sender via ADC (FireBeetle calibrated) (works in conjuction with gauge)
+//  - 3x OneWire temperature sensors
+//  - RPM via magnetic pickup (works in conjunction with gauge)
+//  - Fuel flow estimation based on RPM (requires obtaining real fuel curve at 2000, 2800 and 3500 RPM)
+//  - Engine hours accumulator
+//  - Engine load estimation based on RPM and fuel flow
+// -  Engine load (%) estimation based on RPM, speed (STW/SOG), wind (requires calibration for your boat)
+//  - Engine coolant temp (via boat's coolant temp sender, requires gauge to be fitted  and working, for american sender range)
+//  - Fuel flow (LPH) estimation based on RPM and engine load (requires calibration for your engine/boat)
+//  - Oil pressure, for american sender resistance (via boat's oil pressure sender, requires gauge to be fitted and working)
+//  - Engine hours accumulator, resetable via UI
+//  - SK debug output
+//  - OTA update
+//  - Full UI configuration for SK paths and calibration, setting wifi and SK server address
+// values sent to SignalK IAW https://signalk.org/specification/1.5.0/doc/vesselsBranch.html
+//  Note: you need a signalk server and ideally a wifi router (although CerboGX can act
+//  as AP).
+//  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired.)
+// values sent to SignalK IAW https://signalk.org/specification/1.5.0/doc/vesselsBranch.html (note: minor errrors
+//  in spec (Appendix A) must be corrected for compatibility with canboat.js )
+//
+//  Note: you need a signalk server and ideally a wifi router (although CerboGX or Raspbery Pi can act
+//  as an AP for the ESP32).
+//
+//  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired, minor bug corrections
+//  required for engine paramenters in the add-in
+//
+// oil pressure sender sierra OP24301 Range-1 Gauge: 240 Ohms at 0 PSI
+// engine coolant sender: american resistance type D
+// one wire sensors: DS18B20
+// Designed for flywheel gear tooth rpm sensor
+//
+// Setup / customization notes:
+// - You'll need to know your RPM / fuel flow / boat speed (STW) in calm conditions with clean hull
+// - You'll need to estimate the impact of wind and other other factors on engine load
+// - You'll need to know your engine rating curve (RPM / kW) for accurate load calculation (ChatGPT can help with this)
+//    if you provide the fuel / output curve (diagram) points from your engine's spec sheet
+// - You'll need to know how many teeth are on your flywheel gear for RPM calculation
+//
+// ============================================================================
 
 #ifndef UNIT_TEST
 
@@ -76,20 +117,26 @@ const float   OIL_ADC_REF_VOLTAGE  = 2.5f;
 const float   OIL_PULLUP_RESISTOR  = 220.0f;
 
 // ---------------------------------------------------------------------------
-// CONSTANTS
+// CONSTANTS — REQUIRED BY SENSOR MODULES (extern in headers)
 // ---------------------------------------------------------------------------
+
+// ADC / sampling
 const float ADC_SAMPLE_RATE_HZ = 10.0f;
 
+// Coolant divider network
 const float DIV_R1 = 30000.0f;
 const float DIV_R2 = 7500.0f;
 const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
 
+// Coolant electrical model
 const float COOLANT_SUPPLY_VOLTAGE = 13.5f;
 const float COOLANT_GAUGE_RESISTOR = 1180.0f;
 
+// RPM sensor
 const float RPM_TEETH = 116.0f;
 const float RPM_MULTIPLIER = 1.0f / RPM_TEETH;
 
+// OneWire timing
 const uint32_t ONEWIRE_READ_DELAY_MS = 500;
 
 // Shared RPM frequency (rev/s)
@@ -132,9 +179,6 @@ void setup() {
   setupCoolantSimulator();
 #endif
 
-
-
-
   SetupLogging();
 
   SensESPAppBuilder builder;
@@ -146,16 +190,8 @@ void setup() {
 
   sensesp_app = builder.get_app();
 
-  
   // ========================================================================
   // Engine performance inputs from SK (Signal K paths)
-  /* 
-  Signal K Path	Unit	Notes
-navigation.speedThroughWater	m/s	SI normalized
-navigation.speedOverGround	m/s	SI normalized
-environment.wind.speedApparent	m/s	SI normalized
-environment.wind.angleApparent	radians	Signed, vessel-relative
-*/
   // ========================================================================
   auto* stw = new SKValueListener<float>(
       "navigation.speedThroughWater",
@@ -209,14 +245,11 @@ environment.wind.angleApparent	radians	Signed, vessel-relative
       awa
   );
 
-  sensesp_app->start();
-
   // ========================================================================
   // STATUS PAGE (SensESP v3.1.0)
-  // URL: http://<esp32-ip>/status
+  // Reads referenced variables at render time
   // ========================================================================
 
-  // ---- Coolant ------------------------------------------------------------
   new StatusPageItem<float>("ADC Voltage (V)",
                             coolant_adc_volts,
                             "Coolant",
@@ -227,7 +260,6 @@ environment.wind.angleApparent	radians	Signed, vessel-relative
                             "Coolant",
                             20);
 
-  // ---- Engine Speed -------------------------------------------------------
   new StatusPageItem<float>("RPM Input Frequency (Hz)",
                             rpm_adc_hz,
                             "Engine",
@@ -238,7 +270,6 @@ environment.wind.angleApparent	radians	Signed, vessel-relative
                             "Engine",
                             20);
 
-  // ---- Temperatures -------------------------------------------------------
   new StatusPageItem<float>("Exhaust Elbow (°C)",
                             temp_elbow_c,
                             "OneWire Temperatures",
@@ -254,18 +285,17 @@ environment.wind.angleApparent	radians	Signed, vessel-relative
                             "OneWire Temperatures",
                             30);
 
-  // ---- Engine Performance -------------------------------------------------
   new StatusPageItem<float>("Fuel Flow (L/hr)",
                             fuel_flow_lph,
                             "Engine",
-                            10);
+                            30);
 
   new StatusPageItem<float>("Engine Load (%)",
                             engine_load_pct,
                             "Engine",
-                            20);
+                            40);
 
-  
+  sensesp_app->start();
 }
 
 // ============================================================================
@@ -276,12 +306,11 @@ void setup_engine_hours() {
   auto* hours = new EngineHours("/config/sensors/engine_hours");
 
   auto* hours_to_seconds = hours->connect_to(
-      new Linear(3600.0f, 0.0f, "/config/sensors/engine_hours_to_seconds")
+      new Linear(3600.0f, 0.0f)
   );
 
   auto* sk_hours = new SKOutputFloat(
-      "propulsion.engine.runTime",
-      "/config/outputs/sk/engine_hours"
+      "propulsion.engine.runTime"
   );
 
   if (g_frequency != nullptr) {
@@ -289,44 +318,13 @@ void setup_engine_hours() {
   }
 
   hours_to_seconds->connect_to(sk_hours);
-
-#if ENABLE_DEBUG_OUTPUTS
-  hours->connect_to(new SKOutputFloat("debug.engineHours"));
-#endif
-
-  ConfigItem(hours)
-      ->set_title("Engine Hours Accumulator")
-      ->set_description("Tracks total engine run time in hours");
-
-  ConfigItem(sk_hours)
-      ->set_title("Engine Run Time SK Path")
-      ->set_description("Signal K path for engine runtime (seconds)");
-
-
-    }
+}
 
 // ============================================================================
 // LOOP
 // ============================================================================
 void loop() {
-
-#ifdef RPM_SIMULATOR
-  static uint32_t last_debug = 0;
-  if (millis() - last_debug > 200) {
-    Serial.printf("Pulses: %u\n", pulse_count);
-    last_debug = millis();
-  }
-#endif
-
   sensesp_app->get_event_loop()->tick();
-
-#ifdef RPM_SIMULATOR
-  loopRPMSimulator();
-#endif
-
-#if COOLANT_SIMULATOR
-  loopCoolantSimulator();
-#endif
 }
 
 #endif  // UNIT_TEST
