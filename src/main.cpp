@@ -148,8 +148,10 @@ Frequency* g_frequency = nullptr;
 // ---------------------------------------------------------------------------
 
 // Coolant
-float coolant_adc_volts = NAN;
-float coolant_temp_c    = NAN;
+// NOTE: SensESP Status page suppresses non-finite values (NaN/Inf). Initialize
+// to finite values so the fields render immediately and then update live.
+float coolant_adc_volts = 0.0f;
+float coolant_temp_c    = 0.0f;
 
 // RPM
 float rpm_adc_hz = NAN;
