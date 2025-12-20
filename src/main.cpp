@@ -119,7 +119,7 @@ const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
 const float COOLANT_SUPPLY_VOLTAGE = 13.5f;  //13.5 volt nominal, indication will be close enough at 12-14 VDC
 
 // resistance of the coolant gauge located at the helm
-const float COOLANT_GAUGE_RESISTOR = 1180.0f;   // Derived from 6.8V @ 1352Ω coolant temp gauge resistance
+const float COOLANT_GAUGE_RESISTOR = 1212.0f;   // Derived from 6.8V @ 1352Ω coolant temp gauge resistance
 // recheck this at operating temperature
 
 const float RPM_TEETH = 116.0f;  // Number of teeth on flywheel gear for RPM sender 3JH3E
