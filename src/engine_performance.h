@@ -1,20 +1,43 @@
 #pragma once
 
 // ============================================================================
-// ENGINE LOAD & FUEL FLOW ESTIMATION
+// ENGINE PERFORMANCE & FUEL FLOW ESTIMATION
 // ============================================================================
 //
-// STW enable/disable is implemented using a Linear transform as a config carrier.
-// This is REQUIRED for SensESP v3.1.0.
+// Design invariants:
+//  1) At a given RPM, reduced STW MUST increase engine load.
+//  2) Current (SOG–STW delta) has no direct effect on engine load.
+//  3) Apparent wind represents aerodynamic drag:
+//     • Headwind  → increases load
+//     • Crosswind → increases load (leeway + rudder drag)
+//     • Tailwind  → may slightly reduce load (bounded)
+//  4) Wind must NEVER excuse a loss of STW.
+//  5) Wind effects are ignored below ~7 knots apparent.
 //
-// We feed a constant value (1.0) into the Linear transform via a LambdaTransform.
-// The RPM input is used only to trigger updates.
+// NOTES:
+// Signal K requires fuel.rate in m³/s.
+// SK→N2K plugin converts m³/s → L/h (×3600×1000) for PGN 127489.
+// DO NOT change units here.
+// ---------------------------------------------------------------------------
+// REUSABLE TEST CASES (RPM = 2800)
 //
-//   output = multiplier * 1.0 + offset
+// Baseline:
+//   STW 6.4, calm → Fuel ≈ 2.7 L/hr, Load ≈ 71%
 //
-// Interpretation:
-//   output >= 0.5  → STW USED
-//   output <  0.5  → STW IGNORED
+// Case 1 (towing):
+//   STW 5.9, AWS 5 → Fuel ↑ (~2.9), Load ↑
+//
+// Case 2 (favorable current only):
+//   STW 6.4, SOG 4.6 → Fuel = baseline, Load = baseline
+//
+// Case 3 (towing + headwind):
+//   STW 5.2, AWS 15 head → Fuel ↑↑
+//
+// Case 4 (strong current + headwind):
+//   STW 5.9, SOG 7.5, AWS 15 head → Fuel ↑
+//
+// Case 7 (strong crosswind):
+//   STW 4.9, AWS 25 @ 75° → Fuel ↑↑
 //
 // ============================================================================
 
@@ -24,7 +47,6 @@
 
 #include <sensesp/system/valueproducer.h>
 #include <sensesp/ui/config_item.h>
-#include <sensesp/ui/status_page_item.h>
 
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
@@ -36,17 +58,11 @@
 
 using namespace sensesp;
 
-float stw_ignored_flag = NAN;  // 1 = ignored, 0 = used
-
-
 // ============================================================================
-// CONFIG CARRIER — USE STW FLAG
+// CONFIG CARRIER — USE STW FLAG (operator override)
 // ============================================================================
 
 static Linear* use_stw_cfg = nullptr;
-
-// Status page backing variable
-static float stw_ignored_status = NAN;
 
 // ---------------------------------------------------------------------------
 // Clamp helper
@@ -139,8 +155,8 @@ inline void setup_engine_performance(
 
     // Linear used ONLY as config carrier
     use_stw_cfg = new Linear(
-      1.0f,   // multiplier (1 = use STW)
-      0.0f,   // offset
+      1.0f,
+      0.0f,
       "/config/engine/use_stw"
     );
 
@@ -149,20 +165,11 @@ inline void setup_engine_performance(
       ->set_description("Output >= 0.5 = use STW, < 0.5 = ignore STW")
       ->set_sort_order(90);
 
-    extern float stw_ignored_flag;
-    
-    new StatusPageItem<float>(
-      "STW Ignored (1=yes, 0=no)",
-      stw_ignored_flag,
-      "Engine",
-      30
-    );
-
     cfg_registered = true;
   }
 
   // -------------------------------------------------------------------------
-  // RPM (rps → rpm)
+  // RPM (rev/s → rpm)
   // -------------------------------------------------------------------------
   auto* rpm = rpm_source->connect_to(
     new LambdaTransform<float,float>([](float rps){
@@ -173,7 +180,7 @@ inline void setup_engine_performance(
 
   // Feed constant 1.0 into the Linear config carrier
   rpm->connect_to(
-    new LambdaTransform<float,float>([](float /*rpm*/){
+    new LambdaTransform<float,float>([](float){
       return 1.0f;
     })
   )->connect_to(use_stw_cfg);
@@ -199,9 +206,6 @@ inline void setup_engine_performance(
       if (std::isnan(baseFuel) || baseFuel <= 0.0f) return NAN;
 
       bool use_stw = (use_stw_cfg->get() >= 0.5f);
-      // expose status-friendly value
-      stw_ignored_flag = use_stw ? 0.0f : 1.0f;
-      stw_ignored_status = use_stw ? 0.0f : 1.0f;
 
       float stw_factor = 1.0f;
 

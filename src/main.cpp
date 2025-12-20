@@ -206,6 +206,8 @@ void setup() {
       aws,
       awa
   );
+  sensesp_app->start();
+
 }
 
 
@@ -237,10 +239,7 @@ void setup_engine_hours() {
   // Output to SK in seconds
   hours_to_seconds->connect_to(sk_hours);
 
-  // Debug (still outputs hours) - conditional compilation
-#if ENABLE_DEBUG_OUTPUTS
-  hours->connect_to(new SKOutputFloat("debug.engineHours"));
-#endif
+
 
   // UI configuration remains in HOURS
   ConfigItem(hours)

@@ -1,19 +1,14 @@
+#pragma once
+
 // FOR Yanmar COOLANT TEMP SENDER:
 // DFROBOT Gravity Voltage Divider (SEN0003 / DFR0051)
 // R1 = 30kΩ, R2 = 7.5kΩ → divider ratio = 1/5 → gain = 5.0
-// 
-// ⚠️ VOLTAGE ANALYSIS (14.0V max system):
-// - Normal operation (29-1352Ω sender): 0.30V - 1.49V ✅ SAFE
-// - Open circuit fault (14.0V): 2.8V → EXCEEDS recommended 2.45V spec
-// - ESP32 absolute max: 3.6V (won't damage, but out of spec)
-// - RISK: Reduced accuracy/lifespan when >2.5V, vulnerable to voltage spikes
-
-// - RECOMMENDED: Add 2.4V Zener diode for hardware protection (~$0.50)
-// - Software protection: sender_resistance.h detects open circuit and emits NAN
 //
-
-
-#pragma once
+// Strategy:
+// - Use raw AnalogInput (no ESP32 calibration)
+// - Always publish numeric Kelvin to Signal K
+// - Invalid / missing sensor → 0 °C sentinel = 273.15 K
+//
 
 #include <cmath>
 #include <set>
@@ -27,7 +22,6 @@
 #include <sensesp/signalk/signalk_output.h>
 #include <sensesp/ui/config_item.h>
 
-#include "calibrated_analog_input.h"
 #include "sender_resistance.h"
 
 using namespace sensesp;
@@ -35,7 +29,6 @@ using namespace sensesp;
 // -----------------------------------------------------------------------------
 // Externals provided by main.cpp
 // -----------------------------------------------------------------------------
-
 extern const uint8_t PIN_ADC_COOLANT;
 extern const float ADC_SAMPLE_RATE_HZ;
 extern const float COOLANT_DIVIDER_GAIN;
@@ -48,16 +41,16 @@ extern const float COOLANT_GAUGE_RESISTOR;
 inline void setup_coolant_sender() {
 
   // ---------------------------------------------------------------------------
-  // STEP 1 — Calibrated ADC input (FireBeetle ESP32-E, 2.5 V reference)
+  // STEP 1 — Raw ADC input (no calibration)
   // ---------------------------------------------------------------------------
-  auto* adc_raw = new CalibratedAnalogInput(
+  auto* adc_raw = new AnalogInput(
       PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
       "/config/sensors/coolant/adc_raw"
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 2 — Raw volts (Linear kept for UI trim if ever required)
+  // STEP 2 — Raw volts
   // ---------------------------------------------------------------------------
   auto* volts_raw = adc_raw->connect_to(
       new Linear(
@@ -68,18 +61,18 @@ inline void setup_coolant_sender() {
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 3 — Undo DFRobot 30k / 7.5k divider (×5.0 gain)
+  // STEP 3 — Undo divider (×5.0)
   // ---------------------------------------------------------------------------
   auto* sender_voltage = volts_raw->connect_to(
       new Linear(
-          COOLANT_DIVIDER_GAIN,   // = 5.0
+          COOLANT_DIVIDER_GAIN,
           0.0f,
           "/config/sensors/coolant/sender_voltage"
       )
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 4 — Median filtering (reject ADC spike noise)
+  // STEP 4 — Median filtering
   // ---------------------------------------------------------------------------
   auto* sender_voltage_smooth = sender_voltage->connect_to(
       new Median(
@@ -93,13 +86,13 @@ inline void setup_coolant_sender() {
   // ---------------------------------------------------------------------------
   auto* sender_res_raw = sender_voltage_smooth->connect_to(
       new SenderResistance(
-          COOLANT_SUPPLY_VOLTAGE,   // nominal 13.5 V
+          COOLANT_SUPPLY_VOLTAGE,
           COOLANT_GAUGE_RESISTOR
       )
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 6 — User-adjustable resistance scaling (fine trim)
+  // STEP 6 — Resistance trim
   // ---------------------------------------------------------------------------
   auto* sender_res_scaled = sender_res_raw->connect_to(
       new Linear(
@@ -111,14 +104,12 @@ inline void setup_coolant_sender() {
 
   ConfigItem(sender_res_scaled)
       ->set_title("Coolant Sender Resistance Scale")
-      ->set_description("Fine trim applied to calculated sender resistance")
       ->set_sort_order(350);
 
   // ---------------------------------------------------------------------------
-  // STEP 7 — Sender resistance → coolant temperature (°C)
-  // American resistance Type-D curve
+  // STEP 7 — Resistance → °C (Type-D curve)
   // ---------------------------------------------------------------------------
-  std::set<CurveInterpolator::Sample> ohms_to_temp = {
+  static std::set<CurveInterpolator::Sample> ohms_to_temp = {
       {  29.6f, 121.0f },
       {  45.0f, 100.0f },
       {  85.5f,  85.0f },
@@ -139,21 +130,22 @@ inline void setup_coolant_sender() {
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 8 — Moving average (5 seconds @ 10 Hz)
+  // STEP 8 — Moving average (5 s @ 10 Hz)
   // ---------------------------------------------------------------------------
-auto* temp_C_avg = temp_C->connect_to(
-    new MovingAverage(50)   // 5 seconds @ 10 Hz
-);
+  auto* temp_C_avg = temp_C->connect_to(
+      new MovingAverage(50)
+  );
 
   // ---------------------------------------------------------------------------
-  // STEP 9 — °C → K conversion
+  // STEP 9 — °C → K with safe fallback
+  // Invalid → 0 °C = 273.15 K
   // ---------------------------------------------------------------------------
-  auto* temp_K = temp_C_avg->connect_to(
+  auto* temp_K_safe = temp_C_avg->connect_to(
       new LambdaTransform<float, float>(
           [](float c) {
-            return std::isnan(c) ? NAN : (c + 273.15f);
+            return std::isnan(c) ? 273.15f : (c + 273.15f);
           },
-          "/config/sensors/coolant/temp_K"
+          "/config/sensors/coolant/temp_K_safe"
       )
   );
 
@@ -165,15 +157,14 @@ auto* temp_C_avg = temp_C->connect_to(
       "/config/outputs/sk/coolant_temp"
   );
 
-  temp_K->connect_to(sk_coolant);
+  temp_K_safe->connect_to(sk_coolant);
 
   ConfigItem(sk_coolant)
-      ->set_title("Coolant Temperature SK Path")
-      ->set_description("Signal K path for engine coolant temperature")
+      ->set_title("Coolant Temperature (Engine)")
       ->set_sort_order(750);
 
   // ---------------------------------------------------------------------------
-  // STEP 11 — Optional debug outputs
+  // STEP 11 — Debug outputs
   // ---------------------------------------------------------------------------
 #if ENABLE_DEBUG_OUTPUTS
   adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_volts"));
@@ -184,5 +175,6 @@ auto* temp_C_avg = temp_C->connect_to(
   sender_res_scaled->connect_to(new SKOutputFloat("debug.coolant.senderResistance_scaled"));
   temp_C->connect_to(new SKOutputFloat("debug.coolant.temperatureC_raw"));
   temp_C_avg->connect_to(new SKOutputFloat("debug.coolant.temperatureC_avg"));
+  temp_K_safe->connect_to(new SKOutputFloat("debug.coolant.temperatureK_safe"));
 #endif
 }
