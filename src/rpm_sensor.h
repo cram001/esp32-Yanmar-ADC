@@ -1,12 +1,10 @@
 /* Calculates engine RPM based on signal tapped from engine's magnetic RPM sender
-   Requires OpAmp to amplify the signal and optocoupler to electrically isolate the signal 
-   from the ESP32
+Requires OpAmp to amplify the signal and optocoupler to electrically isolate the signal 
+from the ESP32
 
-   Note that OpAmp may require 5V, which is not provided on the ESP32 board */
+Note that OpAmp may require 5V, which is not provided on the ESP32 board */
 
 #pragma once
-
-#include <cmath>
 
 #include <sensesp/sensors/digital_input.h>
 #include <sensesp/transforms/frequency.h>
@@ -36,7 +34,7 @@ inline void setup_rpm_sensor() {
   auto* pulse_input = new DigitalInputCounter(
       PIN_RPM,
       INPUT,
-      RISING,
+      CHANGE,
       0      // no auto-reset
   );
 
@@ -51,38 +49,27 @@ inline void setup_rpm_sensor() {
   );
 
   // ---------------------------------------------------------------------------
-  // 3. Revolutions/sec → RPM (human-readable, UI/debug only)
+  // 3. Revolutions/sec → RPM (human readable)
   // ---------------------------------------------------------------------------
   auto* rpm_value = g_frequency->connect_to(
       new LambdaTransform<float, float>(
           [](float rev_per_sec) {
-            return std::isnan(rev_per_sec)
-                     ? NAN
-                     : (rev_per_sec * 60.0f);
+            return rev_per_sec * 60.0f;
           },
           "/config/sensors/rpm/rpm_value"
       )
   );
 
   // ---------------------------------------------------------------------------
-  // 4. Signal K output — Engine revolutions
-  // Signal K (as used by canboat.js / signalk-to-nmea2000) expects radians/sec
+  // 4. Signal K output (RPM)
   // ---------------------------------------------------------------------------
   auto* sk_rpm = new SKOutputFloat(
       "propulsion.engine.revolutions",
       "/config/outputs/sk/rpm"
   );
 
-  // rev/s → rad/s
-  g_frequency->connect_to(
-      new LambdaTransform<float, float>(
-          [](float rev_per_sec) {
-            return std::isnan(rev_per_sec)
-                     ? NAN
-                     : (rev_per_sec * 6.283185307f);  // 2π
-          }
-      )
-  )->connect_to(sk_rpm);
+  // Publish directly from g_frequency (avoids double scaling)
+  g_frequency->connect_to(sk_rpm);
 
   // ---------------------------------------------------------------------------
   // 5. Debug outputs (optional)
@@ -102,6 +89,6 @@ inline void setup_rpm_sensor() {
   // ---------------------------------------------------------------------------
   ConfigItem(sk_rpm)
       ->set_title("RPM SK Path")
-      ->set_description("Signal K path for engine revolutions (rad/s)")
+      ->set_description("Signal K path for engine RPM")
       ->set_sort_order(500);
 }
