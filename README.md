@@ -4,6 +4,16 @@ which can run SignalK (install Venus OS Large), the SignalK server can then send
 
 Also included are additional temp sensors, using inexpensive and waterproof OneWire sensors which can be used to monitor exhaust elbow temp, engine compartment temp, alternator temp, etc...
 
+Release notes:
+
+- sensor -> esp32 -> signalk -> signalk-to-nmea200 plugin->canboat.js-> ethernet to N2K adapter -> N2K network
+- for reference : https://github.com/canboat/canboat/blob/master/docs/canboat.json
+- requires patching signalk-to-nmea2000 from https://github.com/cram001/signalk-to-nmea2000-ma  (due to significant timing and unit errors)
+- signalk-to-nmea2000 is responsible for sending N2K data at the correct rate (1hz, 4hz, etc...)
+- If the speed paddle wheel (STW) fails or is sluggish, the user must disable use of STW via sensesp configuration page, code will then use SOG instead to calculate fuel flow and engine load
+- oil pressure monitor not tested / not fully implemented
+
+  
 Currently the code base is designed for:
 
 - Yanmar 3JH3E engine (3800 RPM max)
