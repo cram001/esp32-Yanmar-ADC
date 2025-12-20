@@ -26,7 +26,6 @@
 #include <sensesp/transforms/lambda_transform.h>
 #include <sensesp/signalk/signalk_output.h>
 #include <sensesp/ui/config_item.h>
-#include <sensesp/ui/status_page_item.h>
 
 #include "calibrated_analog_input.h"
 #include "sender_resistance.h"
@@ -42,11 +41,6 @@ extern const float ADC_SAMPLE_RATE_HZ;
 extern const float COOLANT_DIVIDER_GAIN;
 extern const float COOLANT_SUPPLY_VOLTAGE;
 extern const float COOLANT_GAUGE_RESISTOR;
-// -----------------------------------------------------------------------------
-// Status page items (defined in main.cpp)
-// -----------------------------------------------------------------------------
-extern StatusPageItem<float>* ui_coolant_adc_volts;
-extern StatusPageItem<float>* ui_coolant_temp_c;
 
 // -----------------------------------------------------------------------------
 // Engine coolant temperature sender (RPM-independent)
@@ -62,35 +56,21 @@ inline void setup_coolant_sender() {
       "/config/sensors/coolant/adc_raw"
   );
 
-float coolant_adc_volts;
-float coolant_temp_c;
-  
   // ---------------------------------------------------------------------------
   // STEP 2 — Raw volts (Linear kept for UI trim if ever required)
   // ---------------------------------------------------------------------------
-auto* volts_raw = adc_raw->connect_to(
-    new Linear(
-        1.0f,
-        0.0f,
-        "/config/sensors/coolant/volts_raw"
-    )
-);
-
-// Status page tap — ADC volts
-auto* volts_ui = volts_raw->connect_to(
-    new LambdaTransform<float, float>([](float v) {
-        if (ui_coolant_adc_volts) {
-            ui_coolant_adc_volts->set(v);
-        }
-        return v;
-    })
-);
-
+  auto* volts_raw = adc_raw->connect_to(
+      new Linear(
+          1.0f,
+          0.0f,
+          "/config/sensors/coolant/volts_raw"
+      )
+  );
 
   // ---------------------------------------------------------------------------
   // STEP 3 — Undo DFRobot 30k / 7.5k divider (×5.0 gain)
   // ---------------------------------------------------------------------------
-  auto* sender_voltage = volts_ui->connect_to(
+  auto* sender_voltage = volts_raw->connect_to(
       new Linear(
           COOLANT_DIVIDER_GAIN,   // = 5.0
           0.0f,
@@ -162,23 +142,13 @@ auto* volts_ui = volts_raw->connect_to(
   // STEP 8 — Moving average (5 seconds @ 10 Hz)
   // ---------------------------------------------------------------------------
 auto* temp_C_avg = temp_C->connect_to(
-    new MovingAverage(50)
-);
-
-// Status page tap — Coolant temperature (°C)
-auto* temp_C_ui = temp_C_avg->connect_to(
-    new LambdaTransform<float, float>([](float c) {
-        if (ui_coolant_temp_c) {
-            ui_coolant_temp_c->set(c);
-        }
-        return c;
-    })
+    new MovingAverage(50)   // 5 seconds @ 10 Hz
 );
 
   // ---------------------------------------------------------------------------
   // STEP 9 — °C → K conversion
   // ---------------------------------------------------------------------------
-  auto* temp_K = temp_C_ui->connect_to(
+  auto* temp_K = temp_C_avg->connect_to(
       new LambdaTransform<float, float>(
           [](float c) {
             return std::isnan(c) ? NAN : (c + 273.15f);

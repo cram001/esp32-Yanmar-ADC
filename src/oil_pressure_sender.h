@@ -10,14 +10,6 @@
 #include "sensesp/signalk/signalk_output.h"
 #include "sensesp/ui/config_item.h"
 #include "calibrated_analog_input.h"
-#include "sensesp/ui/status_page_item.h"
-
-// -----------------------------------------------------------------------------
-// Status page UI outputs (defined in main.cpp)
-// -----------------------------------------------------------------------------
-extern StatusPageItem<float>* ui_oil_adc_volts;
-extern StatusPageItem<float>* ui_oil_pressure_psi;
-
 
 namespace sensesp {
 
@@ -58,19 +50,6 @@ class OilPressureSender {
         new Median(5, config_path + "/adc_smooth")
     );
 
-// ---------------------------------------------------------------------------
-// STATUS PAGE — Oil pressure ADC volts
-// ---------------------------------------------------------------------------
-    ui_oil_adc_volts = new StatusPageItem<float>(
-        "Oil Pressure ADC (V)",
-        0.0f,
-        "Engine",
-        55
-    );
-
-    // Feed smoothed ADC volts into UI
-    adc_smooth->connect_to(ui_oil_adc_volts);
-
     // ---------------------------
     // 3) Voltage → Resistance
     // ---------------------------
@@ -107,37 +86,23 @@ class OilPressureSender {
         {33, 100}
     };
 
-auto* psi = resistance->connect_to(
-    new CurveInterpolator(
-        &ohms_to_psi,
-        config_path + "/psi"
-    )
-);
+    auto* psi = resistance->connect_to(
+        new CurveInterpolator(
+            &ohms_to_psi,
+            config_path + "/psi"
+        )
+    );
 
-// ---------------------------------------------------------------------------
-// STATUS PAGE — Oil pressure (PSI)
-// ---------------------------------------------------------------------------
-ui_oil_pressure_psi = new StatusPageItem<float>(
-    "Oil Pressure (PSI)",
-    0.0f,
-    "Engine",
-    60
-);
-
-// Insert StatusPageItem directly into pipeline
-psi->connect_to(ui_oil_pressure_psi);
-
-// ---------------------------
-// 5) PSI → Pascals
-// ---------------------------
-auto* pressure_pa = psi->connect_to(
-    new Linear(
-        6894.76f,
-        0.0f,
-        config_path + "/pa"
-    )
-);
-
+    // ---------------------------
+    // 5) PSI → Pascals
+    // ---------------------------
+    auto* pressure_pa = psi->connect_to(
+        new Linear(
+            6894.76f,
+            0.0f,
+            config_path + "/pa"
+        )
+    );
 
     // ---------------------------
     // 6) Signal K output
