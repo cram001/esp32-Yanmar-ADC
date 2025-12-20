@@ -10,6 +10,12 @@ Boat Test Checklist — ESP32 / SignalK / NMEA2000
 ☐ Verify ESP32 data source is connected (no reconnect loop)
 
 2️⃣ Signal K data sanity (before engine start)
+
+☐ Patch battery.js and engineparameters.js
+    ssh root@<ip>
+    password: CerboGx password
+☐ restart SignalK via ui
+
 RPM / frequency path
 
 ☐ Check debug paths:
