@@ -13,10 +13,6 @@ class EngineHours : public Transform<float, float> {
 
     prefs_.begin("engine_runtime", false);
     load_hours();
-  // IMPORTANT:
-  // Emit stored value so StatusPageItem shows persisted hours immediately
-  emit(float(int(hours_ * 10)) / 10.0f);
-
   }
 
   // v3.x override: this is the correct hook
