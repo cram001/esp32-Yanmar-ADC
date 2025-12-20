@@ -8,11 +8,6 @@
 using namespace sensesp;
 using namespace sensesp::onewire;
 
-extern float temp_elbow_c;
-extern float temp_compartment_c;
-extern float temp_alternator_c;
-
-
 // These are provided by main.cpp
 extern const uint8_t PIN_TEMP_COMPARTMENT;
 extern const uint8_t PIN_TEMP_EXHAUST;
@@ -31,12 +26,14 @@ inline void setup_temperature_sensors() {
   // ========================= ENGINE ROOM ==============================
 
   auto* t1 = new OneWireTemperature(
-      s1, ONEWIRE_READ_DELAY_MS,
+      s1,
+      ONEWIRE_READ_DELAY_MS,
       "/config/sensors/temperature/engine"
   );
 
   auto* t1_linear = new Linear(
-      1.0, 0.0,
+      1.0,
+      0.0,
       "/config/sensors/temperature/engine/linear"
   );
 
@@ -60,33 +57,18 @@ inline void setup_temperature_sensors() {
       ->set_title("Engine Room SK Path")
       ->set_sort_order(130);
 
-auto* tap_engine = new LambdaTransform<float, float>(
-  [](float v) {
-    temp_compartment_c = v;
-    return v;
-  }
-);
-
-t1->connect_to(t1_linear)
-   ->connect_to(tap_engine)
-   ->connect_to(sk_engine);
-
-
   // ========================= EXHAUST ==============================
 
   auto* t2 = new OneWireTemperature(
-      s2, ONEWIRE_READ_DELAY_MS,
+      s2,
+      ONEWIRE_READ_DELAY_MS,
       "/config/sensors/temperature/exhaust"
   );
 
   auto* t2_linear = new Linear(
-      1.0, 0.0,
+      1.0,
+      0.0,
       "/config/sensors/temperature/exhaust/linear"
-  );
-
-  auto* sk_exhaust_i70 = new SKOutputFloat(
-      "propulsion.engine.transmision.oilTemperature",
-      "/config/outputs/sk/transmission_temp"
   );
 
   auto* sk_exhaust = new SKOutputFloat(
@@ -94,14 +76,19 @@ t1->connect_to(t1_linear)
       "/config/outputs/sk/exhaust_temp"
   );
 
-  t2->connect_to(t2_linear)->connect_to(sk_exhaust_i70);
+  auto* sk_exhaust_i70 = new SKOutputFloat(
+      "propulsion.engine.transmision.oilTemperature",
+      "/config/outputs/sk/transmission_temp"
+  );
+
   t2->connect_to(t2_linear)->connect_to(sk_exhaust);
+  t2->connect_to(t2_linear)->connect_to(sk_exhaust_i70);
 
   ConfigItem(t2)
       ->set_title("Exhaust elbow DS18B20")
       ->set_sort_order(200);
 
-    ConfigItem(t2_linear)
+  ConfigItem(t2_linear)
       ->set_title("Exhaust elbow DS18B20 calibration")
       ->set_sort_order(201);
 
@@ -109,29 +96,17 @@ t1->connect_to(t1_linear)
       ->set_title("Exhaust elbow SK Path")
       ->set_sort_order(202);
 
-auto* tap_exhaust = new LambdaTransform<float, float>(
-  [](float v) {
-    temp_elbow_c = v;
-    return v;
-  }
-);
-
-t2->connect_to(t2_linear)
-   ->connect_to(tap_exhaust)
-   ->connect_to(sk_exhaust);
-
-tap_exhaust->connect_to(sk_exhaust_i70);
-
-
-      // ========================= ALTERNATOR ==============================
+  // ========================= ALTERNATOR ==============================
 
   auto* t3 = new OneWireTemperature(
-      s3, ONEWIRE_READ_DELAY_MS,
+      s3,
+      ONEWIRE_READ_DELAY_MS,
       "/config/sensors/temperature/alternator"
   );
 
   auto* t3_linear = new Linear(
-      1.0, 0.0,
+      1.0,
+      0.0,
       "/config/sensors/temperature/alternator/linear"
   );
 
@@ -146,23 +121,11 @@ tap_exhaust->connect_to(sk_exhaust_i70);
       ->set_title("Alternator DS18B20")
       ->set_sort_order(300);
 
-    ConfigItem(t3_linear)
+  ConfigItem(t3_linear)
       ->set_title("Alternator DS18B20 calibration")
       ->set_sort_order(301);
 
   ConfigItem(sk_alt)
       ->set_title("Alternator SK Path")
       ->set_sort_order(302);
-
-auto* tap_alt = new LambdaTransform<float, float>(
-  [](float v) {
-    temp_alternator_c = v;
-    return v;
-  }
-);
-
-t3->connect_to(t3_linear)
-   ->connect_to(tap_alt)
-   ->connect_to(sk_alt);
-
-    }
+}

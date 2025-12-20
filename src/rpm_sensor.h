@@ -1,10 +1,6 @@
-/* Calculates engine RPM based on signal tapped from engine's magnetic RPM sender
-Requires OpAmp to amplify the signal and optocoupler to electrically isolate the signal 
-from the ESP32
-
-Note that OpAmp may require 5V, which is not provided on the ESP32 board */
-
 #pragma once
+
+#include <cmath>
 
 #include <sensesp/sensors/digital_input.h>
 #include <sensesp/transforms/frequency.h>
@@ -20,8 +16,9 @@ using namespace sensesp;
 extern const uint8_t PIN_RPM;
 extern const float RPM_TEETH;
 
-// Shared RPM signal (rev/s)
-extern Frequency* g_frequency;
+// Shared signals
+extern Frequency* g_frequency;                 // Hz (rev/s)
+extern ValueProducer<float>* g_engine_rad_s;   // rad/s
 
 // -----------------------------------------------------------------------------
 // RPM sensor (magnetic pickup / flywheel teeth)
@@ -29,17 +26,17 @@ extern Frequency* g_frequency;
 inline void setup_rpm_sensor() {
 
   // ---------------------------------------------------------------------------
-  // 1. Pulse counter (interrupt-driven)
+  // 1. Pulse counter
   // ---------------------------------------------------------------------------
   auto* pulse_input = new DigitalInputCounter(
       PIN_RPM,
       INPUT,
-      CHANGE,
-      0      // no auto-reset
+      RISING,
+      0
   );
 
   // ---------------------------------------------------------------------------
-  // 2. Pulses/sec → revolutions/sec
+  // 2. Pulses/sec → revolutions/sec (Hz)
   // ---------------------------------------------------------------------------
   g_frequency = pulse_input->connect_to(
       new Frequency(
@@ -49,46 +46,54 @@ inline void setup_rpm_sensor() {
   );
 
   // ---------------------------------------------------------------------------
-  // 3. Revolutions/sec → RPM (human readable)
+  // 3. rev/s → rad/s (canonical Signal K value)
   // ---------------------------------------------------------------------------
-  auto* rpm_value = g_frequency->connect_to(
+  g_engine_rad_s = g_frequency->connect_to(
       new LambdaTransform<float, float>(
-          [](float rev_per_sec) {
-            return rev_per_sec * 60.0f;
+          [](float rev_s) {
+            return rev_s * 2.0f * M_PI;
+          },
+          "/config/sensors/rpm/rad_per_sec"
+      )
+  );
+
+  // ---------------------------------------------------------------------------
+  // 4. rad/s → RPM (kept for internal / future use)
+  // ---------------------------------------------------------------------------
+  auto* rpm_value = g_engine_rad_s->connect_to(
+      new LambdaTransform<float, float>(
+          [](float rad_s) {
+            return rad_s * 60.0f / (2.0f * M_PI);
           },
           "/config/sensors/rpm/rpm_value"
       )
   );
 
-  // ---------------------------------------------------------------------------
-  // 4. Signal K output (RPM)
-  // ---------------------------------------------------------------------------
-  auto* sk_rpm = new SKOutputFloat(
-      "propulsion.engine.revolutions",
-      "/config/outputs/sk/rpm"
-  );
-
-  // Publish directly from g_frequency (avoids double scaling)
-  g_frequency->connect_to(sk_rpm);
-
-  // ---------------------------------------------------------------------------
-  // 5. Debug outputs (optional)
-  // ---------------------------------------------------------------------------
 #if ENABLE_DEBUG_OUTPUTS
-  rpm_value->connect_to(
-      new SKOutputFloat("debug.rpm_readable")
+  g_frequency->connect_to(
+      new SKOutputFloat("debug.engine.revolutions_hz")
   );
 
-  g_frequency->connect_to(
-      new SKOutputFloat("debug.rpm_hz")
+  g_engine_rad_s->connect_to(
+      new SKOutputFloat("debug.engine.revolutions_rad_s")
+  );
+
+  rpm_value->connect_to(
+      new SKOutputFloat("debug.engine.rpm")
   );
 #endif
 
   // ---------------------------------------------------------------------------
-  // 6. Config UI
+  // 5. Signal K output (rad/s)
   // ---------------------------------------------------------------------------
-  ConfigItem(sk_rpm)
-      ->set_title("RPM SK Path")
-      ->set_description("Signal K path for engine RPM")
-      ->set_sort_order(500);
+  auto* sk_revs = new SKOutputFloat(
+      "propulsion.engine.revolutions",
+      "/config/outputs/sk/revolutions"
+  );
+
+  g_engine_rad_s->connect_to(sk_revs);
+
+  ConfigItem(sk_revs)
+      ->set_title("Engine Revolutions (rad/s)")
+      ->set_description("Signal K propulsion.engine.revolutions output");
 }
