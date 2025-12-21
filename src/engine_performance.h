@@ -194,6 +194,8 @@ inline void setup_engine_performance(
   auto* fuel_lph_raw = rpm->connect_to(
     new LambdaTransform<float,float>([=](float r){
 
+      if (std::isnan(r)) return NAN;
+
       float baseFuel = base_fuel->get();
       float baseSTW  = base_stw->get();
       float fuelMax  = rated_fuel->get();

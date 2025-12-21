@@ -83,15 +83,24 @@ inline void setup_rpm_sensor() {
   g_engine_rev_s_smooth = g_frequency->connect_to(
       new LambdaTransform<float,float>(
           [](float rps) {
+            static uint32_t last_sample_ms = 0;
             const uint32_t now = millis();
 
             if (!std::isnan(rps) && rps > 0.1f) {
               rpm_buf.push_back({rps, now});
+              last_sample_ms = now;
             }
 
             while (!rpm_buf.empty() &&
                    (now - rpm_buf.front().t_ms) > RPM_AVG_WINDOW_MS) {
               rpm_buf.pop_front();
+            }
+
+            // If we've gone longer than the smoothing window without any new
+            // valid pulses, drop to NAN so downstream logic can fault/idle.
+            if (!rpm_buf.empty() && last_sample_ms != 0 &&
+                (now - last_sample_ms) > RPM_AVG_WINDOW_MS) {
+              rpm_buf.clear();
             }
 
             if (rpm_buf.empty()) {

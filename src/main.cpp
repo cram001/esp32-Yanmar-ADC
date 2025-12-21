@@ -235,7 +235,11 @@ void setup_engine_hours() {
   );
 
   // Connect RPM signal → hours accumulator
-g_engine_rev_s_smooth->connect_to(hours);
+  if (g_engine_rev_s_smooth != nullptr) {
+    g_engine_rev_s_smooth->connect_to(hours);
+  } else {
+    Serial.println("Engine hours skipped: RPM signal unavailable");
+  }
 
 
   // Output to SK in seconds
