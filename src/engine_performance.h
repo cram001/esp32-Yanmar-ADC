@@ -4,6 +4,21 @@
 // ENGINE PERFORMANCE & FUEL FLOW ESTIMATION
 // ============================================================================
 //
+// UNIT & SIGNAL CONTRACT (CRITICAL)
+// --------------------------------
+// • Input engine speed MUST be provided in **revolutions per second (rev/s)**
+// • That signal MUST already be smoothed and free of transient 0 / NAN values
+// • This module MUST NOT be connected directly to a raw Frequency transform
+//
+// Canonical source:
+//   rpm_sensor.h → g_engine_rev_s_smooth
+//
+// If this contract is violated, the following WILL occur:
+//   - propulsion.engine.fuel.rate = null
+//   - propulsion.engine.load = null
+//   - engine hours may stall
+//
+// ---------------------------------------------------------------------------
 // Design invariants:
 //  1) At a given RPM, reduced STW MUST increase engine load.
 //  2) Current (SOG–STW delta) has no direct effect on engine load.
@@ -18,27 +33,6 @@
 // Signal K requires fuel.rate in m³/s.
 // SK→N2K plugin converts m³/s → L/h (×3600×1000) for PGN 127489.
 // DO NOT change units here.
-// ---------------------------------------------------------------------------
-// REUSABLE TEST CASES (RPM = 2800)
-//
-// Baseline:
-//   STW 6.4, calm → Fuel ≈ 2.7 L/hr, Load ≈ 71%
-//
-// Case 1 (towing):
-//   STW 5.9, AWS 5 → Fuel ↑ (~2.9), Load ↑
-//
-// Case 2 (favorable current only):
-//   STW 6.4, SOG 4.6 → Fuel = baseline, Load = baseline
-//
-// Case 3 (towing + headwind):
-//   STW 5.2, AWS 15 head → Fuel ↑↑
-//
-// Case 4 (strong current + headwind):
-//   STW 5.9, SOG 7.5, AWS 15 head → Fuel ↑
-//
-// Case 7 (strong crosswind):
-//   STW 4.9, AWS 25 @ 75° → Fuel ↑↑
-//
 // ============================================================================
 
 #include <cmath>
@@ -50,7 +44,6 @@
 
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
-#include <sensesp/transforms/frequency.h>
 #include <sensesp/transforms/moving_average.h>
 #include <sensesp/transforms/linear.h>
 
@@ -61,7 +54,11 @@ using namespace sensesp;
 // ============================================================================
 // CONFIG CARRIER — USE STW FLAG (operator override)
 // ============================================================================
-
+//
+// Linear is used ONLY as a configuration carrier here.
+// Value >= 0.5 → STW enabled
+// Value <  0.5 → STW ignored
+//
 static Linear* use_stw_cfg = nullptr;
 
 // ---------------------------------------------------------------------------
@@ -73,7 +70,7 @@ static inline T clamp_val(T v, T lo, T hi) {
 }
 
 // ============================================================================
-// BASELINE CURVES
+// BASELINE CURVES (RPM → STW / Fuel)
 // ============================================================================
 static std::set<CurveInterpolator::Sample> baseline_stw_curve = {
   {500,0.0},{1000,0.0},{1800,2.5},{2000,4.3},
@@ -137,7 +134,7 @@ static inline float wind_load_factor(float aws, float awa) {
 // SETUP — ENGINE PERFORMANCE
 // ============================================================================
 inline void setup_engine_performance(
-  Frequency* rpm_source,
+  ValueProducer<float>* rpm_rev_s,   // CANONICAL engine speed (rev/s, smoothed)
   ValueProducer<float>* stw_knots,
   ValueProducer<float>* sog_knots,
   ValueProducer<float>* aws_knots,
@@ -145,7 +142,8 @@ inline void setup_engine_performance(
 ) {
   (void)sog_knots;
 
-  if (!rpm_source) return;
+  // No RPM → no engine performance
+  if (!rpm_rev_s) return;
 
   // -------------------------------------------------------------------------
   // CONFIGURATION UI (REGISTER ONCE)
@@ -153,7 +151,6 @@ inline void setup_engine_performance(
   static bool cfg_registered = false;
   if (!cfg_registered) {
 
-    // Linear used ONLY as config carrier
     use_stw_cfg = new Linear(
       1.0f,
       0.0f,
@@ -169,20 +166,18 @@ inline void setup_engine_performance(
   }
 
   // -------------------------------------------------------------------------
-  // RPM (rev/s → rpm)
+  // rev/s → RPM (engine-performance domain)
   // -------------------------------------------------------------------------
-  auto* rpm = rpm_source->connect_to(
+  auto* rpm = rpm_rev_s->connect_to(
     new LambdaTransform<float,float>([](float rps){
       float r = rps * 60.0f;
       return (r < 300.0f || r > 4500.0f) ? NAN : r;
     })
   );
 
-  // Feed constant 1.0 into the Linear config carrier
+  // Feed constant into config carrier
   rpm->connect_to(
-    new LambdaTransform<float,float>([](float){
-      return 1.0f;
-    })
+    new LambdaTransform<float,float>([](float){ return 1.0f; })
   )->connect_to(use_stw_cfg);
 
   auto* base_stw   = new CurveInterpolator(&baseline_stw_curve);
@@ -194,7 +189,7 @@ inline void setup_engine_performance(
   rpm->connect_to(rated_fuel);
 
   // -------------------------------------------------------------------------
-  // FUEL FLOW CALCULATION
+  // FUEL FLOW CALCULATION (L/h internal)
   // -------------------------------------------------------------------------
   auto* fuel_lph_raw = rpm->connect_to(
     new LambdaTransform<float,float>([=](float r){
@@ -206,7 +201,6 @@ inline void setup_engine_performance(
       if (std::isnan(baseFuel) || baseFuel <= 0.0f) return NAN;
 
       bool use_stw = (use_stw_cfg->get() >= 0.5f);
-
       float stw_factor = 1.0f;
 
       if (use_stw && stw_knots) {
@@ -214,8 +208,7 @@ inline void setup_engine_performance(
         if (!std::isnan(stw) && stw > 0.0f && !stw_invalid(r, stw)) {
           float ratio = baseSTW / stw;
           if (ratio >= 1.05f) {
-            stw_factor = powf(ratio, 0.6f);
-            stw_factor = clamp_val(stw_factor, 1.0f, 2.0f);
+            stw_factor = clamp_val(powf(ratio, 0.6f), 1.0f, 2.0f);
           }
         }
       }
@@ -229,7 +222,6 @@ inline void setup_engine_performance(
       }
 
       float fuel = baseFuel * stw_factor * wind_factor;
-
       if (!std::isnan(fuelMax)) {
         fuel = std::min(fuel, fuelMax);
       }
@@ -239,11 +231,11 @@ inline void setup_engine_performance(
   );
 
   // -------------------------------------------------------------------------
-  // SMOOTHING
+  // OUTPUT: Fuel rate + engine load
   // -------------------------------------------------------------------------
   auto* fuel_lph = fuel_lph_raw->connect_to(new MovingAverage(2));
 
-  // Fuel → m³/s
+  // Fuel → m³/s (Signal K requirement)
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([](float lph){
       return std::isnan(lph) ? NAN : (lph / 1000.0f) / 3600.0f;
@@ -252,7 +244,7 @@ inline void setup_engine_performance(
     new SKOutputFloat("propulsion.engine.fuel.rate")
   );
 
-  // Engine load (%)
+  // Engine load (% of rated fuel)
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([=](float lph){
       float fmax = rated_fuel->get();

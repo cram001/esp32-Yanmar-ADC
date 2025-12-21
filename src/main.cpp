@@ -119,7 +119,7 @@ const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
 const float COOLANT_SUPPLY_VOLTAGE = 13.5f;  //13.5 volt nominal, indication will be close enough at 12-14 VDC
 
 // resistance of the coolant gauge located at the helm
-const float COOLANT_GAUGE_RESISTOR = 1212.0f;   // Derived from 6.8V @ 1352Ω coolant temp gauge resistance
+const float COOLANT_GAUGE_RESISTOR = 1350.0f;   // Derived from 4.33V @ 64 deg C coolant temp gauge resistance
 // recheck this at operating temperature
 
 const float RPM_TEETH = 116.0f;  // Number of teeth on flywheel gear for RPM sender 3JH3E
@@ -129,7 +129,7 @@ const uint32_t ONEWIRE_READ_DELAY_MS = 500;  // half a second between reads
 
 Frequency* g_frequency = nullptr;  // Shared RPM signal (rev/s)
 ValueProducer<float>* g_engine_rad_s = nullptr;  // rad/s for Signal K
-
+ValueProducer<float>* g_engine_rev_s_smooth = nullptr; // rev/s (CANONICAL)
 
 
 // ============================================================================
@@ -200,12 +200,13 @@ void setup() {
   setup_rpm_sensor();
   setup_engine_hours();
   setup_engine_performance(
-      g_frequency,
+      g_engine_rev_s_smooth,  // stable revs
       stw,
       sog,
       aws,
       awa
   );
+
   sensesp_app->start();
 
 }
@@ -234,7 +235,8 @@ void setup_engine_hours() {
   );
 
   // Connect RPM signal → hours accumulator
-  g_frequency->connect_to(hours);
+g_engine_rev_s_smooth->connect_to(hours);
+
 
   // Output to SK in seconds
   hours_to_seconds->connect_to(sk_hours);
