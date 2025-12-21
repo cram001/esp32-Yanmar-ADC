@@ -66,8 +66,8 @@ extern const float   COOLANT_GAUGE_RESISTOR;   // ≈1180–1212 Ω
 inline void setup_coolant_sender() {
 
   // ---------------------------------------------------------------------------
-  // STEP 1 — Calibrated ADC input (returns volts)
-  // FireBeetle ESP32-E, 2.5 V reference
+  // STEP 1 — Calibrated ADC input (returns volts at ESP32 ADC pin)
+  // ESP32 internal ADC reference (~1.1 V), factory-calibrated if available
   // ---------------------------------------------------------------------------
   auto* adc_raw = new CalibratedAnalogInput(
       PIN_ADC_COOLANT,
@@ -77,6 +77,11 @@ inline void setup_coolant_sender() {
 
   // IMPORTANT: custom Sensor<> subclasses are NOT auto-enabled by SensESP.
   adc_raw->enable();
+
+  // Publish ADC calibration mode to Signal K (static debug metadata)
+  adc_raw->publish_calibration_mode(
+      "debug.coolant.adc_calibration"
+  );
 
   // ---------------------------------------------------------------------------
   // STEP 2 — Raw ADC volts (DFRobot output voltage ≈ sender_pin / 5)
@@ -212,25 +217,12 @@ inline void setup_coolant_sender() {
   // STEP 12 — Debug outputs (human readable)
   // ---------------------------------------------------------------------------
 #if ENABLE_DEBUG_OUTPUTS
-  // ADC pin voltage (what ESP32 sees)
   adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_input_V"));
-
-  // DFRobot output voltage (same as adc_input_V, but kept explicit)
   volts_raw->connect_to(new SKOutputFloat("debug.coolant.adc_output_V"));
-
-  // Gauge sender pin voltage (after ×5 undo)
   sender_voltage->connect_to(new SKOutputFloat("debug.coolant.sender_pin_V"));
-
-  // Calculated sender resistance (Ω)
   sender_resistance->connect_to(new SKOutputFloat("debug.coolant.sender_resistance_ohm"));
-
-  // Temperature before clamp/averaging (may be NaN internally)
   temp_C->connect_to(new SKOutputFloat("debug.coolant.temperature_C_raw"));
-
-  // Temperature after clamp + averaging (what drives SK, in °C)
   temp_C_avg->connect_to(new SKOutputFloat("debug.coolant.temperature_C"));
-
-  // Final Kelvin output (what is sent to SK)
   temp_K->connect_to(new SKOutputFloat("debug.coolant.temperature_K"));
 #endif
 }

@@ -108,7 +108,7 @@ const float OIL_PULLUP_RESISTOR = 220.0f;   // Resistance (ohm) in mid-range of 
 // -----------------------------------------------
 // CONSTANTS
 // -----------------------------------------------
-const float ADC_SAMPLE_RATE_HZ = 10.0f;
+const float ADC_SAMPLE_RATE_HZ = 1.0f;   // sample rate for coolant temp and oil pressure ADC pins (Hz)
 
 // From the DFRobot voltage divider specs:
 const float DIV_R1 = 30000.0f;     // Top resistor
