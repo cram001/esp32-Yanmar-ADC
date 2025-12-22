@@ -15,9 +15,9 @@ using namespace sensesp;
 //
 // • Uses ESP32 ADC1 directly (bypasses Arduino analogRead)
 // • Applies Espressif ADC calibration if present (Two-Point or eFuse Vref)
-// • Falls back to correct internal reference (1100 mV) if no eFuse data
+// • Falls back to internal reference (1100 mV) if no eFuse data
 // • Emits calibrated ADC-pin voltage (Volts)
-// • Publishes calibration mode to Signal K (debug)
+// • Publishes calibration mode to Signal K (debug, static)
 // ============================================================================
 
 class CalibratedAnalogInput : public Sensor<float> {
@@ -39,14 +39,12 @@ class CalibratedAnalogInput : public Sensor<float> {
 
     // -----------------------------------------------------------------------
     // Characterize ADC (factory calibration if present)
-    // NOTE:
-    //   default_vref = 1100 mV is ONLY used if no eFuse calibration exists.
     // -----------------------------------------------------------------------
     esp_adc_cal_value_t cal_type = esp_adc_cal_characterize(
         ADC_UNIT_1,
         ADC_ATTEN_DB_11,
         ADC_WIDTH_BIT_12,
-        1100,   // internal ESP32 ADC reference (fallback only)
+        1100,   // fallback Vref (used only if no eFuse data)
         &adc_chars_);
 
     switch (cal_type) {
@@ -76,8 +74,8 @@ class CalibratedAnalogInput : public Sensor<float> {
   // Must be called explicitly (custom Sensor subclasses are not auto-enabled)
   // -------------------------------------------------------------------------
   void enable() {
-    uint32_t interval_ms =
-        static_cast<uint32_t>(1000.0f / std::max(read_rate_hz_, 0.1f));
+    float rate = (read_rate_hz_ > 0.1f) ? read_rate_hz_ : 0.1f;
+    uint32_t interval_ms = static_cast<uint32_t>(1000.0f / rate);
 
     sensesp_app->get_event_loop()->onRepeat(
         interval_ms,
@@ -85,12 +83,13 @@ class CalibratedAnalogInput : public Sensor<float> {
   }
 
   // -------------------------------------------------------------------------
-  // Publish calibration mode to Signal K (string, static)
+  // Publish calibration mode to Signal K (static string)
   // -------------------------------------------------------------------------
-  void publish_calibration_mode(const char* sk_path) {
-    auto* sk = new SKOutputString(sk_path);
-    sk->set_input(&calibration_mode_);
-  }
+void publish_calibration_mode(const char* sk_path) {
+  auto* sk = new SKOutputString(sk_path);
+  auto* value = new ObservableValue<String>(calibration_mode_);
+  value->connect_to(sk);
+}
 
  private:
   int pin_;
@@ -125,8 +124,7 @@ class CalibratedAnalogInput : public Sensor<float> {
 
       default:
         ESP_LOGE("CalADC", "Unsupported ADC pin: %d", pin);
-        // Fail-safe: return a valid channel but readings will be meaningless
-        return ADC1_CHANNEL_0;
+        return ADC1_CHANNEL_0;  // fail-safe
     }
   }
 };

@@ -6,7 +6,7 @@
 //
 // CANONICAL ENGINE SPEED CONTRACT
 // -------------------------------
-// • Canonical engine speed = **revolutions per second (rev/s)**
+// • Canonical engine speed = **revolutions per second (rev/s, Hz)**
 // • This signal MUST be smoothed and free of transient 0 / NAN
 // • engine_hours and engine_performance MUST consume this signal
 //
@@ -15,7 +15,11 @@
 // Signal map produced here:
 //   g_frequency             → rev/s (raw, diagnostic only)
 //   g_engine_rev_s_smooth   → rev/s (SMOOTHED, CANONICAL)
-//   g_engine_rad_s_smooth   → rad/s (derived, for SK / N2K)
+//   g_engine_rad_s          → rad/s (DERIVED, INTERNAL ONLY)
+//
+// NOTE:
+// Signal K propulsion.engine.revolutions MUST be published in Hz (rev/s).
+// Conversion to rad/s is handled downstream (SK → NMEA2000 PGN 127488).
 // ============================================================================
 
 #include <cmath>
@@ -38,7 +42,7 @@ extern const float   RPM_TEETH;
 // Shared signals (defined in main.cpp)
 extern Frequency*            g_frequency;           // rev/s (raw)
 extern ValueProducer<float>* g_engine_rev_s_smooth; // rev/s (CANONICAL)
-extern ValueProducer<float>* g_engine_rad_s;        // rad/s (smoothed)
+extern ValueProducer<float>* g_engine_rad_s;        // rad/s (derived)
 
 // -----------------------------------------------------------------------------
 // RPM smoothing parameters
@@ -97,7 +101,7 @@ inline void setup_rpm_sensor() {
             }
 
             // If we've gone longer than the smoothing window without any new
-            // valid pulses, drop to NAN so downstream logic can fault/idle.
+            // valid pulses, drop to NAN so downstream logic can fault / idle.
             if (!rpm_buf.empty() && last_sample_ms != 0 &&
                 (now - last_sample_ms) > RPM_AVG_WINDOW_MS) {
               rpm_buf.clear();
@@ -119,20 +123,23 @@ inline void setup_rpm_sensor() {
   );
 
   // ---------------------------------------------------------------------------
-  // 4. rev/s → rad/s (for Signal K & NMEA 2000)
+  // 4. rev/s → rad/s (DERIVED, INTERNAL ONLY)
   // ---------------------------------------------------------------------------
-  
   constexpr float PI_F = 3.14159265f;
+
   g_engine_rad_s = g_engine_rev_s_smooth->connect_to(
       new LambdaTransform<float,float>(
           [](float rps) {
-          return std::isnan(rps) ? NAN : (rps * 2.0f * PI_F);
+            return std::isnan(rps) ? NAN : (rps * 2.0f * PI_F);
           },
           "/config/sensors/rpm/rad_per_sec_smooth"
       )
   );
 
 #if ENABLE_DEBUG_OUTPUTS
+  // ---------------------------------------------------------------------------
+  // Debug outputs (explicit units)
+  // ---------------------------------------------------------------------------
   g_frequency->connect_to(
       new SKOutputFloat("debug.engine.revolutions_hz_raw")
   );
@@ -155,19 +162,20 @@ inline void setup_rpm_sensor() {
 #endif
 
   // ---------------------------------------------------------------------------
-  // 5. Signal K output (rad/s)
+  // 5. Signal K output (Hz / rev/s — NOT rad/s)
   // ---------------------------------------------------------------------------
   auto* sk_revs = new SKOutputFloat(
       "propulsion.engine.revolutions",
       "/config/outputs/sk/revolutions"
   );
 
-  g_engine_rad_s->connect_to(sk_revs);
+  // Signal K expects Hz (rev/s)
+  g_engine_rev_s_smooth->connect_to(sk_revs);
 
   ConfigItem(sk_revs)
-      ->set_title("Engine Revolutions (rad/s)")
+      ->set_title("Engine Revolutions (Hz)")
       ->set_description(
-          "Smoothed propulsion.engine.revolutions (rad/s), suitable for "
-          "NMEA 2000 PGN 127488 rapid update"
+          "Smoothed propulsion.engine.revolutions in Hz (rev/s). "
+          "Converted to rad/s downstream for NMEA 2000 PGN 127488."
       );
 }
