@@ -1,0 +1,1 @@
+Change reason: expose coolant gauge resistor (COOLANT_GAUGE_RESISTOR) through SensESP config UI so end users can adjust in app.
