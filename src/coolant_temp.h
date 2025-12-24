@@ -125,12 +125,18 @@ inline void setup_coolant_sender() {
   auto* sender_resistance = sender_voltage_smooth->connect_to(
       new SenderResistance(
           COOLANT_SUPPLY_VOLTAGE,
-          COOLANT_GAUGE_RESISTOR
+          COOLANT_GAUGE_RESISTOR,
+          "/config/sensors/coolant/gauge_resistance"
       )
   );
 
+  ConfigItem(sender_resistance)
+      ->set_title("Coolant Gauge Coil (ohm)")
+      ->set_description("Internal resistance of the helm coolant gauge; adjust to match your gauge so sender ohms are computed correctly")
+      ->set_sort_order(325);
+
   // ---------------------------------------------------------------------------
-  // STEP 6 — User-adjustable resistance trim (fine calibration)
+  // STEP 6 – User-adjustable resistance trim (fine calibration)
   // ---------------------------------------------------------------------------
   auto* sender_res_scaled = sender_resistance->connect_to(
       new Linear(

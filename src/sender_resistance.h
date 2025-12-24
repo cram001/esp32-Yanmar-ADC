@@ -19,10 +19,14 @@
 class SenderResistance : public sensesp::Transform<float, float> {
 
  public:
-  SenderResistance(float supply_voltage, float r_gauge_coil)
-      : Transform<float, float>("sender_resistance"),
+  SenderResistance(float supply_voltage,
+                   float r_gauge_coil,
+                   const String& config_path = "")
+      : Transform<float, float>(config_path),
         supply_voltage_(supply_voltage),
-        r_gauge_coil_(r_gauge_coil) {}
+        r_gauge_coil_(r_gauge_coil) {
+    this->load();
+  }
 
   void set(const float& vadc) override {
 
@@ -102,4 +106,24 @@ class SenderResistance : public sensesp::Transform<float, float> {
  private:
   float supply_voltage_;     // battery/gauge supply voltage (12.0–14.4)
   float r_gauge_coil_;       // gauge internal resistance (~1180 Ω)
+
+  friend const char* ConfigSchema(const SenderResistance& obj);
+
+ public:
+  bool to_json(JsonObject& config) override {
+    config["gauge_resistance_ohm"] = r_gauge_coil_;
+    return true;
+  }
+
+  bool from_json(const JsonObject& config) override {
+    if (config.containsKey("gauge_resistance_ohm")) {
+      r_gauge_coil_ = config["gauge_resistance_ohm"].as<float>();
+    }
+    return true;
+  }
 };
+
+inline const char* ConfigSchema(const SenderResistance& obj) {
+  (void)obj;
+  return R"JSON({"type":"object","properties":{"gauge_resistance_ohm":{"type":"number","title":"Gauge coil resistance (ohm)"}}})JSON";
+}
