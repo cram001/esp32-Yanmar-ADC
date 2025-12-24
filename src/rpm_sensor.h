@@ -44,6 +44,7 @@ extern ValueProducer<float>* g_engine_rad_s;        // rad/s (smoothed)
 // RPM smoothing parameters
 // -----------------------------------------------------------------------------
 static constexpr uint32_t RPM_AVG_WINDOW_MS = 1000;
+static constexpr uint32_t RPM_STALL_TIMEOUT_MS = 4000;  // allow short gaps before dropping to NAN
 
 struct RpmSample {
   float    rps;
@@ -97,9 +98,10 @@ inline void setup_rpm_sensor() {
             }
 
             // If we've gone longer than the smoothing window without any new
-            // valid pulses, drop to NAN so downstream logic can fault/idle.
+            // valid pulses, drop to NAN (after a grace period) so downstream
+            // logic can fault/idle without flapping.
             if (!rpm_buf.empty() && last_sample_ms != 0 &&
-                (now - last_sample_ms) > RPM_AVG_WINDOW_MS) {
+                (now - last_sample_ms) > RPM_STALL_TIMEOUT_MS) {
               rpm_buf.clear();
             }
 
@@ -155,7 +157,7 @@ inline void setup_rpm_sensor() {
 #endif
 
   // ---------------------------------------------------------------------------
-  // 5. Signal K output (rad/s)
+  // 5. Signal K output (Hz)
   // ---------------------------------------------------------------------------
   auto* sk_revs = new SKOutputFloat(
       "propulsion.engine.revolutions",
