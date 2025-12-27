@@ -9,33 +9,41 @@
  * -------
  * Accumulates engine run time in HOURS based on engine speed updates.
  *
- * Design principles:
- *  - No status page coupling
- *  - No arbitrary RPM threshold (idle still counts)
+ * Design principles
+ * -----------------
+ *  - Time-based accumulation (NOT update-rate dependent)
+ *  - Any finite RPM > 0 means "engine running" (idle counts)
+ *  - No arbitrary RPM threshold (e.g. >500 RPM)
  *  - Decoupled timing:
- *      * accumulation → every input update
+ *      * accumulation → continuous via millis()
  *      * output        → ~1 Hz
  *      * persistence   → low frequency to limit flash wear
  *
  * Units
  * -----
- *  - Input:  RPM (any positive value means "engine turning")
- *  - Stored internally: hours (float)
+ *  - Input:  RPM (float)
+ *  - Stored internally: hours (float, authoritative)
  *  - Output (emit): hours, rounded to 0.1 h
- *  - Signal K output path conversion to seconds is handled externally
+ *
+ * Signal K
+ * --------
+ *  - This class outputs HOURS.
+ *  - Conversion to seconds for Signal K is handled externally.
  *
  * Debug
  * -----
  *  - Optional SK debug output publishes raw, unrounded hours
  *    to allow validation of accumulation and persistence behavior.
  *
+ * Explicit non-goals
+ * ------------------
+ *  - No UI coupling (StatusPageItem)
+ *  - No RPM gating logic
+ *  - No flash writes on every update
+ *  - No dependency on engine load or vessel movement
+ *
  * Notes
  * -----
- *  - This class intentionally does NOT:
- *      * apply RPM > 500 gating
- *      * depend on UI / StatusPageItem
- *      * write to Preferences on every update
- *
  *  - If an explicit "engine running" boolean is desired in the future,
  *    derive it upstream and feed it here instead of RPM.
  * ============================================================================
@@ -45,7 +53,6 @@
 #include <Preferences.h>
 
 #include <sensesp/transforms/transform.h>
-#include <sensesp/ui/config_item.h>
 #include <sensesp/signalk/signalk_output.h>
 
 namespace sensesp {
@@ -67,19 +74,28 @@ class EngineHours : public Transform<float, float> {
 #endif
   }
 
+  // --------------------------------------------------------------------------
   // SensESP v3.x hook
+  // --------------------------------------------------------------------------
   void set(const float& rpm) override {
     const unsigned long now = millis();
 
+    // Any finite positive RPM means the engine is turning
+    bool engine_running = (!isnan(rpm) && rpm > 0.0f);
+
     // ------------------------------------------------------------
-    // 1. Accumulate engine hours
+    // 1. Accumulate engine hours (time-based)
     // ------------------------------------------------------------
-    // Any positive, finite RPM means the engine is turning.
-    if (last_sample_ms_ != 0 && !isnan(rpm) && rpm > 0.0f) {
+    // IMPORTANT:
+    // Accumulation is based on wall-clock time, NOT update frequency.
+    // This ensures engine hours continue to increment even if RPM
+    // updates stall or remain constant.
+    if (last_sample_ms_ != 0 && engine_running) {
       float dt_hours = (now - last_sample_ms_) / 3600000.0f;
       hours_ += dt_hours;
     }
 
+    // Always advance sample clock
     last_sample_ms_ = now;
 
     // ------------------------------------------------------------
@@ -93,7 +109,6 @@ class EngineHours : public Transform<float, float> {
         debug_hours_->set(hours_);  // raw, unrounded
       }
 #endif
-
       last_emit_ms_ = now;
     }
 
@@ -158,7 +173,7 @@ class EngineHours : public Transform<float, float> {
 };
 
 // --------------------------------------------------------------------------
-// SensESP configuration schema
+// SensESP configuration schema (REQUIRED)
 // --------------------------------------------------------------------------
 inline String ConfigSchema(const EngineHours&) {
   return R"JSON({
