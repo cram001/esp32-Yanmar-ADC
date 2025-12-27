@@ -58,7 +58,7 @@
 #include "sensesp/transforms/moving_average.h"
 
 // Custom functions
-#include "sender_resistance.h"
+//#include "sender_resistance.h"  // not in use
 #include "engine_hours.h"
 #include "calibrated_analog_input.h"
 #include "oil_pressure_sender.h"
@@ -110,17 +110,35 @@ const float OIL_PULLUP_RESISTOR = 220.0f;   // Resistance (ohm) in mid-range of 
 // -----------------------------------------------
 const float ADC_SAMPLE_RATE_HZ = 1.0f;   // sample rate for coolant temp and oil pressure ADC pins (Hz)
 
-// From the DFRobot voltage divider specs:
-const float DIV_R1 = 30000.0f;     // Top resistor
-const float DIV_R2 = 7500.0f;      // Bottom resistor
+
+// NOTE:
+// Coolant temperature calibration is now ADC-volts based.
+// Divider values are retained for documentation / hardware reference only.
+
+
+// Coolant sender voltage divider (hardware verified)
+//
+// R1 = 30.0 kΩ
+// R2 = 8.06 kΩ
+// Gain = (R1 + R2) / R2 ≈ 4.724
+//
+const float DIV_R1 = 30000.0f;     // Top resistor (ohms)
+const float DIV_R2 = 8060.0f;      // Bottom resistor (ohms)
 const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
+
 // COOLANT_DIVIDER_GAIN = 5.0
 
 const float COOLANT_SUPPLY_VOLTAGE = 13.5f;  //13.5 volt nominal, indication will be close enough at 12-14 VDC
 
-// resistance of the coolant gauge located at the helm
-const float COOLANT_GAUGE_RESISTOR = 150.0f;   // Derived from 4.33V @ 64 deg C coolant temp gauge resistance
-// recheck this at operating temperature
+// Effective internal resistance of the helm coolant gauge (ohms)
+//
+// NOTE:
+// This is the electrically effective resistance seen by the sender pin,
+// derived empirically from measured sender-pin voltage vs temperature.
+// It is NOT the raw coil resistance of the gauge movement.
+//  OBSOLETE: now calculated from voltage readings
+//const float COOLANT_GAUGE_RESISTOR = 150.0f;
+
 
 const float RPM_TEETH = 116.0f;  // Number of teeth on flywheel gear for RPM sender 3JH3E
 const float RPM_MULTIPLIER = 1.0f / RPM_TEETH; // to get revolutions per second from pulses per second
