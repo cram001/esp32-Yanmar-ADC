@@ -117,7 +117,10 @@ const float ADC_SAMPLE_RATE_HZ = 1.0f;   // sample rate for coolant temp and oil
 
 
 // Coolant sender voltage divider (hardware verified)
-//
+// Measure the resistor values on your boat to confirm these values!
+// Then confirm ADC readings at various known temperatures to validate calibration.
+// May need to adjust resistor values for better accuracy if necessary, to match ADC readings to
+// gauge signal pin volts
 // R1 = 30.0 kΩ
 // R2 = 8.06 kΩ
 // Gain = (R1 + R2) / R2 ≈ 4.724
