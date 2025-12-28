@@ -28,25 +28,33 @@
  *
  * OPERATIONAL MODES
  * -----------------
- *  1) UNDERWAY (STW ≥ 0.1 kt OR SOG ≥ 0.1 kt)
+ *  1) UNDERWAY
+ *     (STW ≥ 0.15 kt AND SOG ≥ 0.15 kt, subject to STW enable)
  *     → Fuel is load-coupled using:
  *         - RPM baseline fuel curve
  *         - STW deficit penalty
  *         - Wind drag penalty
  *
- *  2) STATIONARY / DOCK (STW < 0.15 kt AND SOG < 0.15 kt)
+ *  2) STATIONARY / DOCK
+ *     (STW < 0.15 kt OR SOG < 0.15 kt, respecting STW disable)
  *     → Fuel derived ONLY from an RPM-indexed idle curve
  *     → No STW or wind effects applied
+ *
+ * SPECIAL CASE
+ * ------------
+ *  • If BOTH STW and SOG are NAN:
+ *      → Vessel state is unknown
+ *      → Fall back to baseline fuel curve (RPM-only)
  *
  * ENGINE LOAD RULE
  * ----------------
  *  • When engine is running and vessel is stationary,
- *    engine load is clamped to a minimum of 4 %
+ *    engine load is clamped to a minimum of 8 %
  *
  * NON-GOALS
  * ---------
  *  • No gearbox awareness (neutral vs in-gear)
- *  • No alternator load modelling
+ *  • No alternator current → torque modelling
  *  • No RPM hysteresis or debounce
  * ============================================================================
  */
@@ -66,6 +74,13 @@
 using namespace sensesp;
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+// Centralized dock / stationary threshold
+constexpr float DOCK_SPEED_KTS = 0.15f;
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 
@@ -73,13 +88,6 @@ using namespace sensesp;
 template <typename T>
 static inline T clamp_val(T v, T lo, T hi) {
   return (v < lo) ? lo : (v > hi) ? hi : v;
-}
-
-// Vessel considered stationary only if either speeds are effectively zero
-static inline bool vessel_not_moving(float stw, float sog) {
-  bool stw_bad = (std::isnan(stw) || stw < 0.15f);
-  bool sog_bad = (std::isnan(sog) || sog < 0.15f);
-  return stw_bad || sog_bad;
 }
 
 // ============================================================================
@@ -117,7 +125,7 @@ static std::set<CurveInterpolator::Sample> rated_fuel_curve = {
 // IDLE / DOCK FUEL CURVE (RPM → L/h)
 // ============================================================================
 //
-// Used ONLY when STW < 0.15 kt AND SOG < 0.15 kt
+// Used ONLY when vessel is classified as stationary
 //
 static std::set<CurveInterpolator::Sample> idle_fuel_curve = {
   { 800,  0.6 },
@@ -176,7 +184,6 @@ inline void setup_engine_performance(
 
   // -------------------------------------------------------------------------
   // CONFIGURATION UI (REGISTER ONCE)
-  //  allows user to prevent use of STW if sensor is known bad (through web UI)
   // -------------------------------------------------------------------------
   static bool cfg_registered = false;
   if (!cfg_registered) {
@@ -229,10 +236,41 @@ inline void setup_engine_performance(
       float stw = stw_knots ? stw_knots->get() : NAN;
       float sog = sog_knots ? sog_knots->get() : NAN;
 
-      // ------------------------------------------------------------
-      // DOCK / STATIONARY MODE
-      // ------------------------------------------------------------
-      if (vessel_not_moving(stw, sog)) {
+      bool use_stw = (use_stw_cfg->get() >= 0.5f);
+
+      bool stw_valid = !std::isnan(stw);
+      bool sog_valid = !std::isnan(sog);
+
+      // ---------------------------------------------------------------------
+      // STW usability for physics (data quality, not vessel state)
+      // ---------------------------------------------------------------------
+      bool stw_usable_for_physics =
+          use_stw &&
+          stw_valid &&
+          stw >= DOCK_SPEED_KTS &&
+          !stw_invalid(r, stw);
+
+      // ---------------------------------------------------------------------
+      // Vessel docked state (operational classification)
+      // ---------------------------------------------------------------------
+      bool vessel_docked = false;
+
+      if (use_stw) {
+        if ((stw_valid && stw < DOCK_SPEED_KTS) ||
+            (sog_valid && sog < DOCK_SPEED_KTS)) {
+          vessel_docked = true;
+        }
+      } else {
+        if (sog_valid && sog < DOCK_SPEED_KTS) {
+          vessel_docked = true;
+        }
+      }
+      // If both speeds NAN → unknown → NOT docked
+
+      // ---------------------------------------------------------------------
+      // DOCK / STATIONARY MODE → RPM-indexed idle fuel
+      // ---------------------------------------------------------------------
+      if (vessel_docked) {
         float idle = idle_fuel->get();
         float fmax = rated_fuel->get();
 
@@ -242,9 +280,9 @@ inline void setup_engine_performance(
         }
       }
 
-      // ------------------------------------------------------------
-      // UNDERWAY — LOAD-COUPLED MODEL
-      // ------------------------------------------------------------
+      // ---------------------------------------------------------------------
+      // UNDERWAY / UNKNOWN MODE → load-coupled or baseline fuel
+      // ---------------------------------------------------------------------
       float baseFuel = base_fuel->get();
       float baseSTW  = base_stw->get();
       float fuelMax  = rated_fuel->get();
@@ -252,11 +290,8 @@ inline void setup_engine_performance(
       if (std::isnan(baseFuel) || baseFuel <= 0.0f) return NAN;
 
       float stw_factor = 1.0f;
-      bool use_stw = (use_stw_cfg->get() >= 0.5f);
 
-      if (use_stw && baseSTW > 0.1f && !std::isnan(stw) &&
-          stw >= 0.1f && !stw_invalid(r, stw)) {
-
+      if (stw_usable_for_physics && baseSTW > DOCK_SPEED_KTS) {
         float ratio = baseSTW / stw;
         if (ratio >= 1.05f) {
           stw_factor = clamp_val(powf(ratio, 0.6f), 1.0f, 2.0f);
@@ -292,14 +327,42 @@ inline void setup_engine_performance(
   );
 
   // -------------------------------------------------------------------------
-  // OUTPUT — Engine load to Signal K
+  // OUTPUT — Engine load for Signal K
   // -------------------------------------------------------------------------
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([=](float lph){
 
       float fmax = rated_fuel->get();
       if (std::isnan(lph) || std::isnan(fmax) || fmax <= 0.0f) return NAN;
-      return clamp_val(lph / fmax, 0.0f, 1.0f);
+
+      float load = lph / fmax;
+
+      float stw = stw_knots ? stw_knots->get() : NAN;
+      float sog = sog_knots ? sog_knots->get() : NAN;
+
+      bool use_stw = (use_stw_cfg->get() >= 0.5f);
+
+      bool stw_valid = !std::isnan(stw);
+      bool sog_valid = !std::isnan(sog);
+
+      bool vessel_docked = false;
+      if (use_stw) {
+        if ((stw_valid && stw < DOCK_SPEED_KTS) ||
+            (sog_valid && sog < DOCK_SPEED_KTS)) {
+          vessel_docked = true;
+        }
+      } else {
+        if (sog_valid && sog < DOCK_SPEED_KTS) {
+          vessel_docked = true;
+        }
+      }
+
+      // Minimum dock load clamp (engine running, no propulsive work)
+      if (load > 0.0f && vessel_docked) {
+        if (load < 0.08f) load = 0.08f;
+      }
+
+      return clamp_val(load, 0.0f, 1.0f);
     })
   )->connect_to(
     new SKOutputFloat("propulsion.engine.load")
