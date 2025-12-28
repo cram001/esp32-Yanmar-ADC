@@ -34,7 +34,7 @@
  *         - STW deficit penalty
  *         - Wind drag penalty
  *
- *  2) STATIONARY / DOCK (STW < 0.1 kt AND SOG < 0.1 kt)
+ *  2) STATIONARY / DOCK (STW < 0.15 kt AND SOG < 0.15 kt)
  *     → Fuel derived ONLY from an RPM-indexed idle curve
  *     → No STW or wind effects applied
  *
@@ -75,11 +75,11 @@ static inline T clamp_val(T v, T lo, T hi) {
   return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
-// Vessel considered stationary only if BOTH speeds are effectively zero
+// Vessel considered stationary only if either speeds are effectively zero
 static inline bool vessel_not_moving(float stw, float sog) {
-  bool stw_bad = (std::isnan(stw) || stw < 0.1f);
-  bool sog_bad = (std::isnan(sog) || sog < 0.1f);
-  return stw_bad && sog_bad;
+  bool stw_bad = (std::isnan(stw) || stw < 0.15f);
+  bool sog_bad = (std::isnan(sog) || sog < 0.15f);
+  return stw_bad || sog_bad;
 }
 
 // ============================================================================
@@ -103,8 +103,8 @@ static std::set<CurveInterpolator::Sample> baseline_stw_curve = {
 };
 
 static std::set<CurveInterpolator::Sample> baseline_fuel_curve = {
-  {500,0.6},{1000,0.75},{1800,1.3},{2000,1.6},
-  {2400,2.45},{2800,2.7},{3200,3.4},
+  {500,0.6},{1000,0.75},{1800,1.1},{2000,1.5},
+  {2400,2.0},{2800,2.7},{3200,3.4},
   {3600,5.0},{3800,6.4},{3900,6.5}
 };
 
@@ -117,11 +117,11 @@ static std::set<CurveInterpolator::Sample> rated_fuel_curve = {
 // IDLE / DOCK FUEL CURVE (RPM → L/h)
 // ============================================================================
 //
-// Used ONLY when STW < 0.1 kt AND SOG < 0.1 kt
+// Used ONLY when STW < 0.15 kt AND SOG < 0.15 kt
 //
 static std::set<CurveInterpolator::Sample> idle_fuel_curve = {
   { 800,  0.6 },
-  { 3600, 0.9 }
+  { 3600, 1.4 }
 };
 
 // ============================================================================
@@ -176,6 +176,7 @@ inline void setup_engine_performance(
 
   // -------------------------------------------------------------------------
   // CONFIGURATION UI (REGISTER ONCE)
+  //  allows user to prevent use of STW if sensor is known bad (through web UI)
   // -------------------------------------------------------------------------
   static bool cfg_registered = false;
   if (!cfg_registered) {
@@ -280,7 +281,7 @@ inline void setup_engine_performance(
   auto* fuel_lph = fuel_lph_raw->connect_to(new MovingAverage(2));
 
   // -------------------------------------------------------------------------
-  // OUTPUT — Fuel rate (m³/s)
+  // OUTPUT — Fuel rate (m³/s) for Signal K
   // -------------------------------------------------------------------------
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([](float lph){
@@ -291,7 +292,7 @@ inline void setup_engine_performance(
   );
 
   // -------------------------------------------------------------------------
-  // OUTPUT — Engine load
+  // OUTPUT — Engine load to Signal K
   // -------------------------------------------------------------------------
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([=](float lph){
