@@ -1,36 +1,15 @@
 #pragma once
 
 // ============================================================================
-// COOLANT TEMPERATURE SENDER — YANMAR / AMERICAN TYPE D
+// COOLANT TEMPERATURE — ADC-BASED, PERIODIC, STABLE OUTPUT
+// (SensESP v3.1.x compatible)
 //
-// Electrical model (unchanged, proven):
-//
-//   13.5 V (gauge supply)
-//      |
-//   R_gauge  (≈1180–1212 Ω, inside gauge)
-//      |
-//      +----> Sender pin (THIS is what we measure)
-//      |
-//   R_sender (NTC to ground)
-//      |
-//   Engine block / GND
-//
-// Measurement:
-//
-//   • Sender pin voltage is tapped
-//   • DFRobot 30k / 7.5k divider scales it by 1/5
-//   • ESP32 ADC measures scaled voltage
-//   • Software multiplies by 5 to recover sender-pin voltage
-//
-// Physics:
-//
-//   • Hot engine → low sender resistance → LOW voltage
-//   • Cold engine → high sender resistance → HIGH voltage
-//
-// Output policy:
-//
-//   • Never emit NaN downstream
-//   • If invalid / out of curve, clamp to 0 °C (273.15 K) sentinel
+// Policy:
+//   • ADC volts → temperature via empirical table
+//   • Median filter + 5 s moving average
+//   • Output emitted at 2 Hz regardless of value change
+//   • Momentary ADC NaN / out-of-range is ignored
+//   • Last valid temperature is frozen and continues to emit
 //
 // ============================================================================
 
@@ -46,7 +25,6 @@
 #include <sensesp/ui/config_item.h>
 
 #include "calibrated_analog_input.h"
-#include "sender_resistance.h"
 
 using namespace sensesp;
 
@@ -56,128 +34,89 @@ using namespace sensesp;
 extern const uint8_t PIN_ADC_COOLANT;
 extern const float   ADC_SAMPLE_RATE_HZ;
 
-extern const float   COOLANT_DIVIDER_GAIN;     // = 5.0 (DFRobot)
-extern const float   COOLANT_SUPPLY_VOLTAGE;   // = 13.5 V nominal
-extern const float   COOLANT_GAUGE_RESISTOR;   // ≈1180–1212 Ω
+// -----------------------------------------------------------------------------
+// ADC validity domain (used only to qualify updates)
+// -----------------------------------------------------------------------------
+constexpr float ADC_MIN_VALID_V = 0.257f;   // ≈121 °C
+constexpr float ADC_MAX_VALID_V = 1.392f;   // ≈10 °C
 
 // -----------------------------------------------------------------------------
-// Engine coolant temperature sender
+// Engine coolant temperature
 // -----------------------------------------------------------------------------
 inline void setup_coolant_sender() {
 
   // ---------------------------------------------------------------------------
-  // STEP 1 — Calibrated ADC input (returns volts at ESP32 ADC pin)
-  // ESP32 internal ADC reference (~1.1 V), factory-calibrated if available
+  // ADC tracking
+  // ---------------------------------------------------------------------------
+  static float last_adc_v = NAN;
+  static float last_valid_temp_K = NAN;
+
+  // ---------------------------------------------------------------------------
+  // STEP 1 — Calibrated ADC input
   // ---------------------------------------------------------------------------
   auto* adc_raw = new CalibratedAnalogInput(
       PIN_ADC_COOLANT,
       ADC_SAMPLE_RATE_HZ,
       "/config/sensors/coolant/adc_raw"
   );
-
-  // IMPORTANT: custom Sensor<> subclasses are NOT auto-enabled by SensESP.
   adc_raw->enable();
 
-  // Publish ADC calibration mode to Signal K (static debug metadata)
   adc_raw->publish_calibration_mode(
       "debug.coolant.adc_calibration"
   );
 
-  // ---------------------------------------------------------------------------
-  // STEP 2 — Raw ADC volts (DFRobot output voltage ≈ sender_pin / 5)
-  // ---------------------------------------------------------------------------
-  auto* volts_raw = adc_raw->connect_to(
-      new Linear(
-          1.0f,
-          0.0f,
-          "/config/sensors/coolant/volts_raw"
+  // Track raw ADC value (side-channel only)
+  adc_raw->connect_to(
+      new LambdaTransform<float, float>(
+          [](float v) {
+            last_adc_v = v;
+            return v;
+          }
       )
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 3 — Recover sender-pin voltage (undo 5:1 divider)
+  // STEP 2 — Median filter
   // ---------------------------------------------------------------------------
-  auto* sender_voltage = volts_raw->connect_to(
-      new Linear(
-          COOLANT_DIVIDER_GAIN,   // ×5
-          0.0f,
-          "/config/sensors/coolant/sender_voltage"
-      )
-  );
-
-  // ---------------------------------------------------------------------------
-  // STEP 4 — Median filtering (noise rejection)
-  // ---------------------------------------------------------------------------
-  auto* sender_voltage_smooth = sender_voltage->connect_to(
+  auto* adc_v_smooth = adc_raw->connect_to(
       new Median(
           5,
-          "/config/sensors/coolant/sender_voltage_smooth"
+          "/config/sensors/coolant/adc_v_smooth"
       )
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 5 — Sender voltage → sender resistance (Ω)
-  //
-  //   R_sender = R_gauge × V_sender / (V_supply − V_sender)
-  //
-  // SenderResistance may emit NaN on fault / out-of-range.
+  // STEP 3 — ADC volts → temperature (°C)
   // ---------------------------------------------------------------------------
-  auto* sender_resistance = sender_voltage_smooth->connect_to(
-      new SenderResistance(
-          COOLANT_SUPPLY_VOLTAGE,
-          COOLANT_GAUGE_RESISTOR,
-          "/config/sensors/coolant/gauge_resistance"
-      )
-  );
+  static std::set<CurveInterpolator::Sample> adc_to_temp = {
 
-  ConfigItem(sender_resistance)
-      ->set_title("Coolant Gauge Coil (ohm)")
-      ->set_description("Internal resistance of the helm coolant gauge; adjust to match your gauge so sender ohms are computed correctly")
-      ->set_sort_order(325);
+      { 0.257f, 121.0f },   // 250 °F, ~30 Ω
 
-  // ---------------------------------------------------------------------------
-  // STEP 6 – User-adjustable resistance trim (fine calibration)
-  // ---------------------------------------------------------------------------
-  auto* sender_res_scaled = sender_resistance->connect_to(
-      new Linear(
-          1.0f,
-          0.0f,
-          "/config/sensors/coolant/resistance_scale"
-      )
-  );
-
-  ConfigItem(sender_res_scaled)
-      ->set_title("Coolant Sender Resistance Scale")
-      ->set_description("Fine trim applied to calculated sender resistance")
-      ->set_sort_order(350);
-
-  // ---------------------------------------------------------------------------
-  // STEP 7 — Sender resistance → coolant temperature (°C)
-  // American resistance Type-D curve
-  // ---------------------------------------------------------------------------
-  static std::set<CurveInterpolator::Sample> ohms_to_temp = {
-      {  29.6f, 121.0f },
-      {  45.0f, 100.0f },
-      {  85.5f,  85.0f },
-      {  90.9f,  82.5f },
-      {  99.0f,  79.0f},    
-      { 104.0f,  76.7f },
-      { 112.0f,  72.0f },
-      { 131.0f,  63.9f },
-      { 207.0f,  56.0f },
-      { 450.0f,  38.0f },
-      {1352.0f,  12.7f }
+      { 0.762f,  80.6f },   // 177 °F
+      { 0.766f,  80.0f },   // 176 °F
+      { 0.786f,  79.4f },   // 175 °F
+      { 0.814f,  78.3f },   // 173 °F
+      { 0.843f,  76.7f },   // 170 °F
+      { 0.898f,  71.1f },   // 160 °F
+      { 0.925f,  67.8f },   // 154 °F
+      { 0.941f,  66.7f },   // 152 °F
+      { 0.943f,  66.1f },   // 151 °F
+      { 1.040f,  60.0f },   // 140 °F
+      { 1.136f,  52.2f },   // 126 °F
+      { 1.212f,  48.9f },   // 120 °F
+      { 1.309f,  40.6f },   // 105 °F
+      { 1.392f,  10.0f }    // 50 °F
   };
 
-  auto* temp_C = sender_res_scaled->connect_to(
+  auto* temp_C = adc_v_smooth->connect_to(
       new CurveInterpolator(
-          &ohms_to_temp,
+          &adc_to_temp,
           "/config/sensors/coolant/temp_C"
       )
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 8 — Clamp invalid temperatures to 0 °C (never emit NaN)
+  // STEP 4 — Ignore NaN (do not poison pipeline)
   // ---------------------------------------------------------------------------
   auto* temp_C_safe = temp_C->connect_to(
       new LambdaTransform<float, float>(
@@ -189,14 +128,19 @@ inline void setup_coolant_sender() {
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 9 — Moving average (5 seconds @ 10 Hz)
+  // STEP 5 — Moving average (5 seconds)
   // ---------------------------------------------------------------------------
+  const int MA_WINDOW =
+      (ADC_SAMPLE_RATE_HZ * 5.0f < 1.0f)
+          ? 1
+          : static_cast<int>(ADC_SAMPLE_RATE_HZ * 5.0f);
+
   auto* temp_C_avg = temp_C_safe->connect_to(
-      new MovingAverage(50)
+      new MovingAverage(MA_WINDOW)
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 10 — °C → K (Signal K requires Kelvin)
+  // STEP 6 — °C → Kelvin
   // ---------------------------------------------------------------------------
   auto* temp_K = temp_C_avg->connect_to(
       new Linear(
@@ -207,29 +151,46 @@ inline void setup_coolant_sender() {
   );
 
   // ---------------------------------------------------------------------------
-  // STEP 11 — Signal K output
+  // STEP 7 — Signal K output (direct periodic emission)
   // ---------------------------------------------------------------------------
   auto* sk_coolant = new SKOutputFloat(
       "propulsion.engine.temperature",
       "/config/outputs/sk/coolant_temp"
   );
 
-  temp_K->connect_to(sk_coolant);
-
   ConfigItem(sk_coolant)
       ->set_title("Coolant Temperature (Engine)")
       ->set_sort_order(750);
 
+  // Periodic emitter (2 Hz, freeze last valid)
+  sensesp_app->get_event_loop()->onRepeat(
+      500,
+      [temp_K, sk_coolant]() {
+
+        float v = temp_K->get();
+
+        // Accept new value only if ADC is sane and value is valid
+        if (!std::isnan(v) &&
+            last_adc_v >= ADC_MIN_VALID_V &&
+            last_adc_v <= ADC_MAX_VALID_V) {
+          last_valid_temp_K = v;
+        }
+
+        // Emit last valid value if we have one
+        if (!std::isnan(last_valid_temp_K)) {
+          sk_coolant->emit(last_valid_temp_K);
+        }
+      }
+  );
+
   // ---------------------------------------------------------------------------
-  // STEP 12 — Debug outputs (human readable)
+  // STEP 8 — Debug outputs
   // ---------------------------------------------------------------------------
 #if ENABLE_DEBUG_OUTPUTS
   adc_raw->connect_to(new SKOutputFloat("debug.coolant.adc_input_V"));
-  volts_raw->connect_to(new SKOutputFloat("debug.coolant.adc_output_V"));
-  sender_voltage->connect_to(new SKOutputFloat("debug.coolant.sender_pin_V"));
-  sender_resistance->connect_to(new SKOutputFloat("debug.coolant.sender_resistance_ohm"));
+  adc_v_smooth->connect_to(new SKOutputFloat("debug.coolant.adc_filtered_V"));
   temp_C->connect_to(new SKOutputFloat("debug.coolant.temperature_C_raw"));
   temp_C_avg->connect_to(new SKOutputFloat("debug.coolant.temperature_C"));
-  temp_K->connect_to(new SKOutputFloat("debug.coolant.temperature_K"));
+  temp_K->connect_to(new SKOutputFloat("debug.coolant.temperature_K_raw"));
 #endif
 }
