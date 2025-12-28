@@ -298,18 +298,7 @@ inline void setup_engine_performance(
 
       float fmax = rated_fuel->get();
       if (std::isnan(lph) || std::isnan(fmax) || fmax <= 0.0f) return NAN;
-
-      float load = lph / fmax;
-
-      float stw = stw_knots ? stw_knots->get() : NAN;
-      float sog = sog_knots ? sog_knots->get() : NAN;
-
-      // Enforce minimum load when engine is running but vessel is stationary
-      if (load >= 0.0f && g_engine_rev_s_smooth >= 400 && vessel_not_moving(stw, sog)) {
-        if (load < 0.08f) load = 0.08f;
-      }
-
-      return clamp_val(load, 0.0f, 1.0f);
+      return clamp_val(lph / fmax, 0.0f, 1.0f);
     })
   )->connect_to(
     new SKOutputFloat("propulsion.engine.load")
