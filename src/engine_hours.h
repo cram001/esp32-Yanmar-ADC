@@ -2,56 +2,33 @@
 
 /*
  * ============================================================================
- * EngineHours
+ * EngineHours — Timer-driven engine runtime accumulator (SensESP v3.1.1)
  * ============================================================================
  *
- * Purpose
- * -------
- * Accumulates engine run time in HOURS based on engine speed updates.
+ * Rules (authoritative):
+ *  - rpm >= 500  → engine running → accrue time
+ *  - rpm < 500   → engine stopped → do not accrue
+ *  - rpm == NaN  → ignore sample (no state change)
  *
- * Design principles
- * -----------------
- *  - Time-based accumulation (NOT update-rate dependent)
- *  - Any finite RPM > 0 means "engine running" (idle counts)
- *  - No arbitrary RPM threshold (e.g. >500 RPM)
- *  - Decoupled timing:
- *      * accumulation → continuous via millis()
- *      * output        → ~1 Hz
- *      * persistence   → low frequency to limit flash wear
+ * Design:
+ *  - RPM provides STATE only
+ *  - Time accumulation driven by SensESP event loop (1 Hz)
+ *  - No dependency on RPM update frequency
  *
- * Units
- * -----
- *  - Input:  RPM (float)
- *  - Stored internally: hours (float, authoritative)
- *  - Output (emit): hours, rounded to 0.1 h
+ * Output:
+ *  - Emits engine hours as float
+ *  - Conversion to seconds handled downstream (SK / N2K)
  *
- * Signal K
- * --------
- *  - This class outputs HOURS.
- *  - Conversion to seconds for Signal K is handled externally.
- *
- * Debug
- * -----
- *  - Optional SK debug output publishes raw, unrounded hours
- *    to allow validation of accumulation and persistence behavior.
- *
- * Explicit non-goals
- * ------------------
- *  - No UI coupling (StatusPageItem)
- *  - No RPM gating logic
- *  - No flash writes on every update
- *  - No dependency on engine load or vessel movement
- *
- * Notes
- * -----
- *  - If an explicit "engine running" boolean is desired in the future,
- *    derive it upstream and feed it here instead of RPM.
+ * Persistence:
+ *  - Stored in ESP32 NVS (Preferences)
+ *  - Periodic writes to limit flash wear
  * ============================================================================
  */
 
 #include <Arduino.h>
 #include <Preferences.h>
 
+#include <sensesp_app.h>                       // SensESPBaseApp + event_loop()
 #include <sensesp/transforms/transform.h>
 #include <sensesp/signalk/signalk_output.h>
 
@@ -62,67 +39,64 @@ class EngineHours : public Transform<float, float> {
   explicit EngineHours(const String& config_path = "")
       : Transform<float, float>(config_path) {
 
-    // Open NVS namespace for persistent storage
+    // ------------------------------------------------------------------------
+    // Persistent storage
+    // ------------------------------------------------------------------------
     prefs_.begin("engine_runtime", false);
-
-    // Restore previously stored engine hours (if any)
     load_hours();
 
 #if ENABLE_DEBUG_OUTPUTS
-    // Raw (unrounded) hours for debugging / validation
-    debug_hours_ = new SKOutputFloat("debug.engine.hours");
+    debug_hours_   = new SKOutput<float>("debug.engine.hours");
+    debug_running_ = new SKOutput<bool>("debug.engine.running");
 #endif
-  }
 
-  // --------------------------------------------------------------------------
-  // SensESP v3.x hook
-  // --------------------------------------------------------------------------
-  void set(const float& rpm) override {
-    const unsigned long now = millis();
+    // ------------------------------------------------------------------------
+    // Authoritative 1 Hz wall-clock timer (SensESP-managed)
+    // ------------------------------------------------------------------------
+    event_loop()->onRepeat(TICK_INTERVAL_MS, [this]() {
+      const unsigned long now = millis();
 
-    // Any finite positive RPM means the engine is turning
-    bool engine_running = (!isnan(rpm) && rpm > 0.0f);
+      // First tick establishes timebase only
+      if (last_tick_ms_ == 0) {
+        last_tick_ms_ = now;
+        return;
+      }
 
-    // ------------------------------------------------------------
-    // 1. Accumulate engine hours (time-based)
-    // ------------------------------------------------------------
-    // IMPORTANT:
-    // Accumulation is based on wall-clock time, NOT update frequency.
-    // This ensures engine hours continue to increment even if RPM
-    // updates stall or remain constant.
-    if (last_sample_ms_ != 0 && engine_running) {
-      float dt_hours = (now - last_sample_ms_) / 3600000.0f;
-      hours_ += dt_hours;
-    }
+      if (engine_running_) {
+        hours_ += (now - last_tick_ms_) / 3600000.0f;
+      }
 
-    // Always advance sample clock
-    last_sample_ms_ = now;
+      last_tick_ms_ = now;
 
-    // ------------------------------------------------------------
-    // 2. Emit output at a controlled rate (~1 Hz)
-    // ------------------------------------------------------------
-    if (now - last_emit_ms_ >= EMIT_INTERVAL_MS) {
-      emit(round_hours(hours_));
+      // Emit RAW hours (rounding belongs downstream)
+      emit(hours_);
 
 #if ENABLE_DEBUG_OUTPUTS
-      if (debug_hours_) {
-        debug_hours_->set(hours_);  // raw, unrounded
-      }
+      debug_hours_->set(hours_);
+      debug_running_->set(engine_running_);
 #endif
-      last_emit_ms_ = now;
-    }
 
-    // ------------------------------------------------------------
-    // 3. Persist occasionally (flash wear protection)
-    // ------------------------------------------------------------
-    if (now - last_save_ms_ >= SAVE_INTERVAL_MS) {
-      save_hours();
-      last_save_ms_ = now;
-    }
+      if (now - last_save_ms_ >= SAVE_INTERVAL_MS) {
+        save_hours();
+        last_save_ms_ = now;
+      }
+    });
   }
 
   // --------------------------------------------------------------------------
-  // Configuration persistence (SensESP UI)
+  // RPM input — state only
+  // --------------------------------------------------------------------------
+  void set(const float& rpm) override {
+    if (isnan(rpm)) {
+      // Ignore invalid samples completely
+      return;
+    }
+
+    engine_running_ = (rpm >= RPM_RUNNING_THRESHOLD);
+  }
+
+  // --------------------------------------------------------------------------
+  // SensESP configuration persistence
   // --------------------------------------------------------------------------
   bool to_json(JsonObject& json) override {
     json["hours"] = hours_;
@@ -138,31 +112,32 @@ class EngineHours : public Transform<float, float> {
   }
 
  private:
-  // Timing constants
-  static constexpr unsigned long EMIT_INTERVAL_MS = 1000;   // ~1 Hz output
+  // --------------------------------------------------------------------------
+  // Constants
+  // --------------------------------------------------------------------------
+  static constexpr float RPM_RUNNING_THRESHOLD = 500.0f;
+  static constexpr unsigned long TICK_INTERVAL_MS = 1000;   // 1 Hz
   static constexpr unsigned long SAVE_INTERVAL_MS = 10000;  // flash protection
 
-  // Accumulated engine hours (authoritative value)
+  // --------------------------------------------------------------------------
+  // State
+  // --------------------------------------------------------------------------
   float hours_ = 0.0f;
+  bool engine_running_ = false;
 
-  // Timing state
-  unsigned long last_sample_ms_ = 0;
-  unsigned long last_emit_ms_   = 0;
-  unsigned long last_save_ms_   = 0;
+  unsigned long last_tick_ms_ = 0;
+  unsigned long last_save_ms_ = 0;
 
-  // Persistent storage
   Preferences prefs_;
 
 #if ENABLE_DEBUG_OUTPUTS
-  // Raw debug output (unrounded)
-  SKOutputFloat* debug_hours_ = nullptr;
+  SKOutput<float>* debug_hours_   = nullptr;
+  SKOutput<bool>*  debug_running_ = nullptr;
 #endif
 
-  // Round to 0.1 h for user-facing output
-  static float round_hours(float h) {
-    return floorf(h * 10.0f) / 10.0f;
-  }
-
+  // --------------------------------------------------------------------------
+  // Persistence helpers
+  // --------------------------------------------------------------------------
   void load_hours() {
     hours_ = prefs_.getFloat("engine_hours", 0.0f);
   }
@@ -173,7 +148,7 @@ class EngineHours : public Transform<float, float> {
 };
 
 // --------------------------------------------------------------------------
-// SensESP configuration schema (REQUIRED)
+// SensESP configuration schema (required)
 // --------------------------------------------------------------------------
 inline String ConfigSchema(const EngineHours&) {
   return R"JSON({
@@ -182,7 +157,7 @@ inline String ConfigSchema(const EngineHours&) {
       "hours": {
         "title": "Engine Hours",
         "type": "number",
-        "description": "Engine run time accumulator (stored in hours; converted to seconds for Signal K)"
+        "description": "Engine run time accumulator (hours; timer-driven)"
       }
     }
   })JSON";

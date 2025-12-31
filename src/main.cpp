@@ -29,7 +29,8 @@
 // Setup / customization notes:
 // - You'll need to know your RPM / fuel flow / boat speed (STW) in calm conditions with clean hull
 // - You'll need to estimate the impact of wind and other other factors on engine load
-// - You'll need to know your engine rating curve (RPM / kW) for accurate load calculation (ChatGPT can help with this)
+// - You'll need to know your engine rating curve (RPM / kW) for 
+//accurate load calculation (ChatGPT can help with this)
 //    if you provide the fuel / output curve (diagram) points from your engine's spec sheet
 // - You'll need to know how many teeth are on your flywheel gear for RPM calculation
 // ============================================================================
