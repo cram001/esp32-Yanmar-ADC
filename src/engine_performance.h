@@ -90,6 +90,17 @@ static inline T clamp_val(T v, T lo, T hi) {
   return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
+// Max output helper for curve sets (used for load normalization)
+static inline float max_curve_output(const std::set<CurveInterpolator::Sample>& curve) {
+  float max_val = NAN;
+  for (const auto& sample : curve) {
+    if (std::isnan(max_val) || sample.output_ > max_val) {
+      max_val = sample.output_;
+    }
+  }
+  return max_val;
+}
+
 // ============================================================================
 // CONFIG CARRIER — USE STW FLAG
 // ============================================================================
@@ -120,6 +131,8 @@ static std::set<CurveInterpolator::Sample> rated_fuel_curve = {
   {500,0.9},{1800,1.4},{2000,1.8},{2400,2.45},
   {2800,3.8},{3200,5.25},{3600,7.8},{3900,9.6}
 };
+
+static const float rated_fuel_curve_peak = max_curve_output(rated_fuel_curve);
 
 // ============================================================================
 // IDLE / DOCK FUEL CURVE (RPM → L/h)
@@ -332,7 +345,7 @@ inline void setup_engine_performance(
   fuel_lph->connect_to(
     new LambdaTransform<float,float>([=](float lph){
 
-      float fmax = rated_fuel->get();
+      const float fmax = rated_fuel_curve_peak;  // normalize against full-load peak
       if (std::isnan(lph) || std::isnan(fmax) || fmax <= 0.0f) return NAN;
 
       float load = lph / fmax;
