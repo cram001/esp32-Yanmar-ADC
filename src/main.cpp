@@ -97,7 +97,7 @@ void setup_engine_hours();
 // -----------------------------------------------
 const uint8_t PIN_TEMP_COMPARTMENT = 4;  // one wire for engine compartment /digital  12
 const uint8_t PIN_TEMP_EXHAUST     = 16;  // one wire,strapped to exhaust elbow digital 11
-const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin?? / digital 10 NOT USED
+const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin?? / digital 10  - NOT USED
 
 const uint8_t PIN_ADC_COOLANT      = 39;  // engine's coolant temperature sender
 const uint8_t PIN_RPM              = 25;   // magnetic pickup for RPM (digital input) digital 2
