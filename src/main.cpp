@@ -96,7 +96,7 @@ void setup_engine_hours();
 // PIN DEFINITIONS — FIREBEETLE ESP32-E   EDIT THESE IF REQUIRE FOR YOUR BOARD
 // -----------------------------------------------
 const uint8_t PIN_TEMP_COMPARTMENT = 4;  // one wire for engine compartment /digital  12
-const uint8_t PIN_TEMP_EXHAUST     = 12;  // one wire,strapped to exhaust elbow digital 13
+const uint8_t PIN_TEMP_EXHAUST     = 14;  // one wire,strapped to exhaust elbow digital 6
 const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin?? / digital 10  - NOT USED
 
 const uint8_t PIN_ADC_COOLANT      = 39;  // engine's coolant temperature sender
