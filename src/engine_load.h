@@ -1,24 +1,25 @@
-// engine_load.h
 #pragma once
 
 /*
  * ============================================================================
- * ENGINE LOAD — kW-BASED (AUTHORITATIVE)
+ * ENGINE LOAD — kW-BASED, HARDENED (AUTHORITATIVE)
  * ============================================================================
  *
- * PURPOSE
- * -------
- *  • Compute engine load from fuel burn and max power curve
+ * RULES
+ * -----
+ *  • Load is a STATE (never NaN)
+ *  • Engine off        → load = 0
+ *  • Engine running    → finite [0..1]
+ *  • Brief glitches    → held / clamped
  *
- * PUBLISHES
- * ---------
- *  • propulsion.engine.load   (0.0 – 1.0)
+ * INPUTS
+ * ------
+ *  • rpm_rev_s : canonical, stabilized rev/s
+ *  • fuel_lph  : stabilized fuel rate (L/h), 0 = engine off
  *
- * CONTRACT
- * --------
- *  • fuel_lph must be finite (0 = engine off)
- *  • RPM must be rev/s (smoothed preferred)
- *  • Load is NEVER NAN
+ * OUTPUT
+ * ------
+ *  • propulsion.engine.load
  * ============================================================================
  */
 
@@ -53,6 +54,14 @@ static constexpr float FUEL_DENSITY_KG_PER_L = 0.84f;
 static constexpr float ENGINE_RUNNING_RPM   = 500.0f;
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+template <typename T>
+static inline T clamp_val(T v, T lo, T hi) {
+  return (v < lo) ? lo : (v > hi) ? hi : v;
+}
+
+// ============================================================================
 // SETUP — ENGINE LOAD
 // ============================================================================
 inline void setup_engine_load(
@@ -61,41 +70,80 @@ inline void setup_engine_load(
 ) {
   if (!rpm_rev_s || !fuel_lph) return;
 
-  // rev/s → RPM
+  // -------------------------------------------------------------------------
+  // rev/s → RPM (single canonical conversion)
+  // -------------------------------------------------------------------------
   auto* rpm = rpm_rev_s->connect_to(
     new LambdaTransform<float,float>([](float rps){
-      if (std::isnan(rps)) return NAN;
+      if (std::isnan(rps)) return 0.0f;   // NEVER NaN
       float r = rps * 60.0f;
-      return (r < 0.0f || r > 4500.0f) ? NAN : r;
+      return (r < 0.0f || r > 4500.0f) ? 0.0f : r;
     })
   );
 
-  // Max power at RPM
+#if ENABLE_DEBUG_OUTPUTS
+  rpm->connect_to(
+    new SKOutputFloat("debug.engine.rpm.load_domain")
+  );
+#endif
+
+  // -------------------------------------------------------------------------
+  // Max power at current RPM (kW)
+  // -------------------------------------------------------------------------
   auto* max_power = new CurveInterpolator(&max_power_curve);
   rpm->connect_to(max_power);
 
-  // Actual power from fuel (kW)
+#if ENABLE_DEBUG_OUTPUTS
+  max_power->connect_to(
+    new SKOutputFloat("debug.engine.maxPower_kW")
+  );
+#endif
+
+  // -------------------------------------------------------------------------
+  // Actual delivered power from fuel (kW)
+  //   0 fuel → 0 kW (NOT NaN)
+  // -------------------------------------------------------------------------
   auto* actual_power_kW =
-    fuel_lph->connect_to(new LambdaTransform<float,float>(
-      [](float lph){
-        if (std::isnan(lph) || lph <= 0.0f) return 0.0f;
+    fuel_lph->connect_to(
+      new LambdaTransform<float,float>([](float lph){
+        if (std::isnan(lph) || lph <= 0.0f) {
+          return 0.0f;
+        }
         return (lph * FUEL_DENSITY_KG_PER_L * 1000.0f) / BSFC_G_PER_KWH;
       })
     );
 
-  // Load fraction
+#if ENABLE_DEBUG_OUTPUTS
+  actual_power_kW->connect_to(
+    new SKOutputFloat("debug.engine.actualPower_kW")
+  );
+#endif
+
+  // -------------------------------------------------------------------------
+  // Load fraction — HARDENED
+  // -------------------------------------------------------------------------
   actual_power_kW->connect_to(
     new LambdaTransform<float,float>([=](float kW){
+
       float r = rpm->get();
-      if (std::isnan(r) || r < ENGINE_RUNNING_RPM) return 0.0f;
+      if (r < ENGINE_RUNNING_RPM) {
+        return 0.0f;   // engine off
+      }
 
       float max_kW = max_power->get();
-      if (std::isnan(max_kW) || max_kW <= 0.0f) return 0.0f;
+      if (std::isnan(max_kW) || max_kW <= 0.0f) {
+        return 0.0f;
+      }
 
       float load = kW / max_kW;
+
+      // Numerical safety
       return clamp_val(load, 0.0f, 1.0f);
     })
   )->connect_to(
-    new SKOutputFloat("propulsion.engine.load")
+    new SKOutputFloat(
+      "propulsion.engine.load",
+      "/config/outputs/sk/engine_load"
+    )
   );
 }
