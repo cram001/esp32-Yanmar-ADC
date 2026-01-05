@@ -57,13 +57,15 @@
 #include "sensesp/transforms/median.h"
 #include "sensesp/transforms/curveinterpolator.h"
 #include "sensesp/transforms/moving_average.h"
+#include "sensesp/transforms/lambda_transform.h"
 
-// Custom functions
+
+// Custom function
 //#include "sender_resistance.h"  // not in use
 #include "engine_hours.h"
 #include "calibrated_analog_input.h"
 #include "oil_pressure_sender.h"
-#include "engine_performance.h"
+#include "engine_fuel.h"
 #include "onewire_sensors.h"
 #include "coolant_temp.h"
 #include "rpm_sensor.h"
@@ -221,7 +223,7 @@ void setup() {
   setup_coolant_sender();
   setup_rpm_sensor();
   setup_engine_hours();
-  setup_engine_performance(
+  setup_engine_fuel(
       g_engine_rev_s_smooth,  // stable revs
       stw,
       sog,
@@ -257,11 +259,19 @@ void setup_engine_hours() {
   );
 
   // Connect RPM signal → hours accumulator
-  if (g_engine_rev_s_smooth != nullptr) {
-    g_engine_rev_s_smooth->connect_to(hours);
-  } else {
-    Serial.println("Engine hours skipped: RPM signal unavailable");
-  }
+if (g_engine_rev_s_smooth != nullptr) {
+
+  auto* revs_to_rpm = g_engine_rev_s_smooth->connect_to(
+      new LambdaTransform<float,float>([](float rps) {
+        return std::isnan(rps) ? NAN : (rps * 60.0f);
+      })
+  );
+
+  revs_to_rpm->connect_to(hours);
+
+} else {
+  Serial.println("Engine hours skipped: RPM signal unavailable");
+}
 
 
   // Output to SK in seconds

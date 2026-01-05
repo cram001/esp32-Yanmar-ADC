@@ -1,5 +1,31 @@
+// engine_load.h
 #pragma once
 
+/*
+ * ============================================================================
+ * ENGINE LOAD — kW-BASED (AUTHORITATIVE)
+ * ============================================================================
+ *
+ * PURPOSE
+ * -------
+ *  • Compute engine load from fuel burn and max power curve
+ *
+ * PUBLISHES
+ * ---------
+ *  • propulsion.engine.load   (0.0 – 1.0)
+ *
+ * CONTRACT
+ * --------
+ *  • fuel_lph must be finite (0 = engine off)
+ *  • RPM must be rev/s (smoothed preferred)
+ *  • Load is NEVER NAN
+ * ============================================================================
+ */
+
+#include <cmath>
+#include <set>
+
+#include <sensesp/system/valueproducer.h>
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
 #include <sensesp/signalk/signalk_output.h>
@@ -7,128 +33,69 @@
 using namespace sensesp;
 
 // ============================================================================
-// ENGINE LOAD MODULE for Yanmar 3JH3E EPA
-//
-// Computes:
-//   • Actual engine power (kW) from fuel burn
-//   • Max possible power at current RPM (kW)
-//   • Engine load fraction (0–1)
-//
-// Required:
-//   • rpm_source → Frequency* (produces revolutions per second)
-//   • fuel_lph  → Transform<float,float>* (L/h from your fuel curve)
-//
-// Publishes to Signal K:
-//   propulsion.mainEngine.load
-//   debug.engine.power_kW
-//   debug.engine.maxPower_kW
-/* RPM, KW, L/hr {1800, 17.9, 1.2}, {2000, 20.9, 1.7}, 
-{2400, 24.6, 2.45}, {2800, 26.8, 3.8}, 
-{3200, 28.3, 5.25}, {3600, 29.5, 7.8}, 
-{3800, 29.83, 9.5} */
+// MAX POWER CURVE (kW) — Yanmar 3JH3E EPA
 // ============================================================================
-
-
-// ---- MAX POWER CURVE (kW) ----
-// Based on Yanmar 3JH3E EPA fuel sheet (40 hp @ 3800 rpm → 29.83 kW)
 static std::set<CurveInterpolator::Sample> max_power_curve = {
-    {1800, 17.9f},
-    {2000, 20.9f},
-    {2400, 24.6f},
-    {2800, 26.8f},
-    {3200, 28.3f},
-    {3600, 29.5f},
-    {3800, 29.83f}
+  {1800, 17.9f},
+  {2000, 20.9f},
+  {2400, 24.6f},
+  {2800, 26.8f},
+  {3200, 28.3f},
+  {3600, 29.5f},
+  {3800, 29.83f}
 };
 
-
-// ---- CONSTANTS ----
-static constexpr float BSFC_G_PER_KWH       = 240.0f;  // typical g/kWh
-static constexpr float FUEL_DENSITY_KG_PER_L = 0.84f;  // diesel density
-
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+static constexpr float BSFC_G_PER_KWH        = 240.0f;
+static constexpr float FUEL_DENSITY_KG_PER_L = 0.84f;
+static constexpr float ENGINE_RUNNING_RPM   = 500.0f;
 
 // ============================================================================
-// setup_engine_load()
+// SETUP — ENGINE LOAD
 // ============================================================================
 inline void setup_engine_load(
-        Frequency* rpm_source,
-        Transform<float, float>* fuel_lph) {
+  ValueProducer<float>* rpm_rev_s,
+  Transform<float,float>* fuel_lph
+) {
+  if (!rpm_rev_s || !fuel_lph) return;
 
-    //
-    // 1) MAX POWER AT RPM (kW)
-    //
-    auto* max_power_interp =
-        new CurveInterpolator(&max_power_curve,
-                              "/config/engine/max_power_curve");
+  // rev/s → RPM
+  auto* rpm = rpm_rev_s->connect_to(
+    new LambdaTransform<float,float>([](float rps){
+      if (std::isnan(rps)) return NAN;
+      float r = rps * 60.0f;
+      return (r < 0.0f || r > 4500.0f) ? NAN : r;
+    })
+  );
 
-    rpm_source->connect_to(max_power_interp);
+  // Max power at RPM
+  auto* max_power = new CurveInterpolator(&max_power_curve);
+  rpm->connect_to(max_power);
 
-
-    //
-    // 2) ACTUAL POWER FROM FUEL RATE (kW)
-    //
-    auto* actual_power_kW =
-        fuel_lph->connect_to(new LambdaTransform<float, float>(
-            [](float lph) -> float {
-
-                if (std::isnan(lph) || lph <= 0.0f) {
-                    return NAN;
-                }
-
-                // Convert L/h → kg/h
-                float fuel_kg_per_h = lph * FUEL_DENSITY_KG_PER_L;
-
-                // P (kW) = (kg/h * 1000 g/kg) / (g/kWh)
-                float kW = (fuel_kg_per_h * 1000.0f) / BSFC_G_PER_KWH;
-
-                return kW;
-            },
-            "/config/engine/actual_power_kW"
-        ));
-
-
-    //
-    // 3) ENGINE LOAD FRACTION = actual kW / max kW
-    //
-    auto* engine_load =
-        actual_power_kW->connect_to(new LambdaTransform<float, float>(
-            [max_power_interp, rpm_source](float actual_kW) -> float {
-
-                if (std::isnan(actual_kW)) {
-                    return NAN;
-                }
-
-                float max_kW = max_power_interp->get();
-                if (std::isnan(max_kW) || max_kW <= 0.0f) {
-                    return NAN;
-                }
-
-                return actual_kW / max_kW;   // 0.0 → 1.0
-            },
-            "/config/engine/load_fraction"
-        ));
-
-
-    //
-    // 4) SIGNAL K OUTPUTS
-    //
-
-    // Engine load (0–1)
-    engine_load->connect_to(
-        new SKOutputFloat("propulsion.engine.load",
-                          "/config/outputs/sk/engine_load")
+  // Actual power from fuel (kW)
+  auto* actual_power_kW =
+    fuel_lph->connect_to(new LambdaTransform<float,float>(
+      [](float lph){
+        if (std::isnan(lph) || lph <= 0.0f) return 0.0f;
+        return (lph * FUEL_DENSITY_KG_PER_L * 1000.0f) / BSFC_G_PER_KWH;
+      })
     );
 
-    // Debug outputs (conditional compilation)
-#if ENABLE_DEBUG_OUTPUTS
-    // Actual delivered power
-    actual_power_kW->connect_to(
-        new SKOutputFloat("debug.engine.power_kW")
-    );
+  // Load fraction
+  actual_power_kW->connect_to(
+    new LambdaTransform<float,float>([=](float kW){
+      float r = rpm->get();
+      if (std::isnan(r) || r < ENGINE_RUNNING_RPM) return 0.0f;
 
-    // Max power at current RPM
-    max_power_interp->connect_to(
-        new SKOutputFloat("debug.engine.maxPower_kW")
-    );
-#endif
+      float max_kW = max_power->get();
+      if (std::isnan(max_kW) || max_kW <= 0.0f) return 0.0f;
+
+      float load = kW / max_kW;
+      return clamp_val(load, 0.0f, 1.0f);
+    })
+  )->connect_to(
+    new SKOutputFloat("propulsion.engine.load")
+  );
 }
