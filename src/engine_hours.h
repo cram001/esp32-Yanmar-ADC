@@ -53,7 +53,6 @@ class EngineHours : public Transform<float, float> {
 
 #if ENABLE_DEBUG_OUTPUTS
     debug_hours_   = new SKOutputFloat("debug.engine.hours");
-    debug_running_ = new SKOutputBool("debug.engine.running");
     debug_rps_     = new SKOutputFloat("debug.engine.revolutions_hz");  // rev/s
 #endif
 
@@ -89,7 +88,6 @@ class EngineHours : public Transform<float, float> {
 
 #if ENABLE_DEBUG_OUTPUTS
       debug_hours_->set(hours_);
-      debug_running_->set(engine_running_);
       debug_rps_->set(last_rev_s_);
 #endif
 
@@ -156,7 +154,6 @@ class EngineHours : public Transform<float, float> {
 
 #if ENABLE_DEBUG_OUTPUTS
   SKOutputFloat* debug_hours_   = nullptr;
-  SKOutputBool*  debug_running_ = nullptr;
   SKOutputFloat* debug_rps_     = nullptr;
 #endif
 

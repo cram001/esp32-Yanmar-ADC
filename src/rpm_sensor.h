@@ -171,8 +171,33 @@ inline void setup_rpm_sensor() {
       "/config/outputs/sk/revolutions"
   );
 
+  // Hold last good RPM during short NaN gaps so SK/N2K instruments don't blank
+  auto* rpm_latched = g_engine_rev_s_smooth->connect_to(
+      new LambdaTransform<float,float>(
+          [](float rps) {
+            static float    last_good_rps = NAN;
+            static uint32_t last_good_ms  = 0;
+            const uint32_t  now           = millis();
+
+            if (std::isfinite(rps)) {
+              last_good_rps = (rps < 0.0f) ? 0.0f : rps;
+              last_good_ms  = now;
+              return last_good_rps;
+            }
+
+            if (last_good_ms != 0 &&
+                (now - last_good_ms) <= RPM_STALL_TIMEOUT_MS &&
+                std::isfinite(last_good_rps)) {
+              return last_good_rps;
+            }
+
+            last_good_rps = 0.0f;
+            return 0.0f;
+          })
+  );
+
   // Signal K expects Hz (rev/s)
-  g_engine_rev_s_smooth->connect_to(sk_revs);
+  rpm_latched->connect_to(sk_revs);
 
   ConfigItem(sk_revs)
       ->set_title("Engine Revolutions (Hz)")

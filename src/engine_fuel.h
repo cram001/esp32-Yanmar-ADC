@@ -45,9 +45,10 @@ using namespace sensesp;
 // ============================================================================
 // CONSTANTS
 // ============================================================================
-constexpr float DOCK_SPEED_KTS     = 0.15f;
+constexpr float DOCK_SPEED_KTS     = 0.20f;
 constexpr float ENGINE_RUNNING_RPM = 500.0f;
 constexpr float MS_TO_KTS          = 1.94384449f;
+static constexpr uint32_t FUEL_OUTPUT_HOLD_MS = 4000;
 
 // ============================================================================
 // HELPERS
@@ -61,6 +62,31 @@ static inline bool engine_running(float rpm) {
   return !std::isnan(rpm) && rpm >= ENGINE_RUNNING_RPM;
 }
 
+// Latch helper: hold last good value briefly to ride through transient NANs
+static inline float latch_with_hold(
+  float v,
+  float& slot,
+  uint32_t& ts_ms,
+  bool zero_on_expire = false
+) {
+  const uint32_t now = millis();
+
+  if (std::isfinite(v)) {
+    slot  = v;
+    ts_ms = now;
+    return v;
+  }
+
+  if (ts_ms != 0 &&
+      (now - ts_ms) <= FUEL_OUTPUT_HOLD_MS &&
+      std::isfinite(slot)) {
+    return slot;
+  }
+
+  slot = zero_on_expire ? 0.0f : NAN;
+  return slot;
+}
+
 // ============================================================================
 // CONFIG — USE STW FLAG
 // ============================================================================
@@ -72,9 +98,9 @@ static Linear* use_stw_cfg = nullptr;
 
 // Baseline STW vs RPM
 static std::set<CurveInterpolator::Sample> baseline_stw_curve = {
-  {500,0.0},{1000,0.0},{1800,2.5},{2000,4.3},
-  {2400,5.0},{2800,6.4},{3200,7.3},
-  {3600,7.45},{3800,7.6},{3900,7.6}
+  {500,0.0},{1000,1.0},{1800,2.9},{2000,4.5},
+  {2250,5.5},{2500,6.4},{3200,7.2},
+  {3600,7.45},{3800,7.45},{3900,7.45}
 };
 
 // Smoothed baseline fuel curve (anchors preserved)
@@ -159,6 +185,16 @@ inline Transform<float,float>* setup_engine_fuel(
 ) {
   if (!rpm_rev_s) return nullptr;
 
+  // Persistent latched state (prevents transient NAN poisoning downstream)
+  struct FuelLatchedState {
+    float rpm     = NAN; uint32_t rpm_ms     = 0;
+    float stw_kts = NAN; uint32_t stw_ms     = 0;
+    float sog_kts = NAN; uint32_t sog_ms     = 0;
+    float aws_kts = NAN; uint32_t aws_ms     = 0;
+    float awa     = NAN; uint32_t awa_ms     = 0;
+  };
+  static auto* state = new FuelLatchedState();
+
   // Config UI
   if (!use_stw_cfg) {
     use_stw_cfg = new Linear(1.0f, 0.0f, "/config/engine_fuel/use_stw");
@@ -167,14 +203,60 @@ inline Transform<float,float>* setup_engine_fuel(
       ->set_description(">= 0.5 = use STW, < 0.5 = ignore STW");
   }
 
-  // rev/s → RPM
+  // rev/s → RPM (latched to ride through transient NAN gaps)
   auto* rpm = rpm_rev_s->connect_to(
     new LambdaTransform<float,float>([](float rps){
       if (std::isnan(rps)) return NAN;
       float r = rps * 60.0f;
       return (r < 0.0f || r > 4500.0f) ? NAN : r;
     })
+  )->connect_to(
+    new LambdaTransform<float,float>([=](float r){
+      float v = latch_with_hold(r, state->rpm, state->rpm_ms, true);
+      return (v < 0.0f) ? 0.0f : v;
+    })
   );
+
+  // Optional inputs (latched to avoid short NAN gaps)
+  ValueProducer<float>* stw_kts_vp = nullptr;
+  ValueProducer<float>* sog_kts_vp = nullptr;
+  ValueProducer<float>* aws_kts_vp = nullptr;
+  ValueProducer<float>* awa_rad_vp = nullptr;
+
+  if (stw_ms) {
+    stw_kts_vp = stw_ms->connect_to(
+      new LambdaTransform<float,float>([=](float ms){
+        float kts = std::isnan(ms) ? NAN : (ms * MS_TO_KTS);
+        return latch_with_hold(kts, state->stw_kts, state->stw_ms);
+      })
+    );
+  }
+
+  if (sog_ms) {
+    sog_kts_vp = sog_ms->connect_to(
+      new LambdaTransform<float,float>([=](float ms){
+        float kts = std::isnan(ms) ? NAN : (ms * MS_TO_KTS);
+        return latch_with_hold(kts, state->sog_kts, state->sog_ms);
+      })
+    );
+  }
+
+  if (aws_ms) {
+    aws_kts_vp = aws_ms->connect_to(
+      new LambdaTransform<float,float>([=](float ms){
+        float kts = std::isnan(ms) ? NAN : (ms * MS_TO_KTS);
+        return latch_with_hold(kts, state->aws_kts, state->aws_ms);
+      })
+    );
+  }
+
+  if (awa_rad) {
+    awa_rad_vp = awa_rad->connect_to(
+      new LambdaTransform<float,float>([=](float rad){
+        return latch_with_hold(rad, state->awa, state->awa_ms);
+      })
+    );
+  }
 
   // Curves
   auto* base_stw   = new CurveInterpolator(&baseline_stw_curve);
@@ -198,8 +280,8 @@ inline Transform<float,float>* setup_engine_fuel(
         return 0.0f;
       }
 
-      float stw_kts = stw_ms ? stw_ms->get() * MS_TO_KTS : NAN;
-      float sog_kts = sog_ms ? sog_ms->get() * MS_TO_KTS : NAN;
+      float stw_kts = stw_kts_vp ? stw_kts_vp->get() : NAN;
+      float sog_kts = sog_kts_vp ? sog_kts_vp->get() : NAN;
 
       bool use_stw = (use_stw_cfg->get() >= 0.5f);
       bool stw_valid = !std::isnan(stw_kts);
@@ -207,12 +289,12 @@ inline Transform<float,float>* setup_engine_fuel(
 
       bool vessel_docked = false;
       if (use_stw) {
-        if ((stw_valid && stw_kts < DOCK_SPEED_KTS) ||
-            (sog_valid && sog_kts < DOCK_SPEED_KTS)) {
+        if ((stw_valid && stw_kts <= DOCK_SPEED_KTS) ||
+            (sog_valid && sog_kts <= DOCK_SPEED_KTS)) {
           vessel_docked = true;
         }
       } else {
-        if (sog_valid && sog_kts < DOCK_SPEED_KTS) {
+        if (sog_valid && sog_kts <= DOCK_SPEED_KTS) {
           vessel_docked = true;
         }
       }
@@ -244,10 +326,10 @@ inline Transform<float,float>* setup_engine_fuel(
       }
 
       float wind_factor = 1.0f;
-      if (aws_ms && awa_rad) {
+      if (aws_kts_vp && awa_rad_vp) {
         wind_factor = wind_load_factor(
-          aws_ms->get() * MS_TO_KTS,
-          awa_rad->get()
+          aws_kts_vp->get(),
+          awa_rad_vp->get()
         );
       }
 
