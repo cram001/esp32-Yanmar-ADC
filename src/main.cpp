@@ -274,8 +274,9 @@ if (g_engine_rev_s_smooth != nullptr) {
 }
 
 
-  // Output to SK in seconds
-  hours_to_seconds->connect_to(sk_hours);
+  // Output to SK in seconds DISABLED ENGINE HOURS OUTPUT TEMPORARILY
+  
+//  hours_to_seconds->connect_to(sk_hours);
 
 
 
