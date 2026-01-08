@@ -15,27 +15,6 @@
 // values sent to SignalK IAW https://signalk.org/specification/1.5.0/doc/vesselsBranch.html (note: minor errrors
 //  in spec (Appendix A) must be corrected for compatibility with canboat.js )
 
-//  Note: you need a signalk server and ideally a wifi router (although CerboGX or Raspbery Pi can act
-//  as an AP for the ESP32).
-
-//  In signalk, configure SK to N2K add-in to forward values to NMEA2000 network if desired, minor bug corrections
-//  required for engine paramenters in the add-in
-
-// oil pressure sender sierra OP24301 Range-1 Gauge: 240 Ohms at 0 PSI
-// engine coolant sender: american resistance type D
-// one wire sensors: DS18B20
-// Designed for flywheel gear tooth rpm sensor
-
-// Setup / customization notes:
-// - You'll need to know your RPM / fuel flow / boat speed (STW) in calm conditions with clean hull
-// - You'll need to estimate the impact of wind and other other factors on engine load
-// - You'll need to know your engine rating curve (RPM / kW) for 
-//accurate load calculation (ChatGPT can help with this)
-//    if you provide the fuel / output curve (diagram) points from your engine's spec sheet
-// - You'll need to know how many teeth are on your flywheel gear for RPM calculation
-// ============================================================================
-// ============================================================================
-
 #ifndef UNIT_TEST
 
 #include <memory>
@@ -59,17 +38,15 @@
 #include "sensesp/transforms/moving_average.h"
 #include "sensesp/transforms/lambda_transform.h"
 
-
 // Custom function
 //#include "sender_resistance.h"  // not in use
 #include "engine_hours.h"
 #include "calibrated_analog_input.h"
-#include "oil_pressure_sender.h"
 #include "engine_fuel.h"
 #include "onewire_sensors.h"
 #include "coolant_temp.h"
 #include "rpm_sensor.h"
-
+#include "oil_pressure.h"
 
 // Simulator/test options
 #ifdef RPM_SIMULATOR
@@ -84,77 +61,50 @@
 #error "Enable only one simulator at a time (both want GPIO26)."
 #endif
 
-// Global SensESP app pointer
 using namespace sensesp;
 using namespace sensesp::onewire;
 
 // -----------------------------------------------
 // FORWARD DECLARATIONS
 // -----------------------------------------------
-
 void setup_engine_hours();
 
 // -----------------------------------------------
 // PIN DEFINITIONS — FIREBEETLE ESP32-E   EDIT THESE IF REQUIRE FOR YOUR BOARD
 // -----------------------------------------------
-const uint8_t PIN_TEMP_COMPARTMENT = 4;  // one wire for engine compartment /digital  12
+const uint8_t PIN_TEMP_COMPARTMENT = 4;   // one wire for engine compartment /digital  12
 const uint8_t PIN_TEMP_EXHAUST     = 14;  // one wire,strapped to exhaust elbow digital 6
-const uint8_t PIN_TEMP_ALT_12V     = 17; // extra sensor... could be aft cabin?? / digital 10  - NOT USED
+const uint8_t PIN_TEMP_ALT_12V     = 17;  // extra sensor... could be aft cabin?? / digital 10  - NOT USED
 
 const uint8_t PIN_ADC_COOLANT      = 39;  // engine's coolant temperature sender
-const uint8_t PIN_RPM              = 25;   // magnetic pickup for RPM (digital input) digital 2
+const uint8_t PIN_RPM              = 25;  // magnetic pickup for RPM (digital input) digital 2
 
-const uint8_t PIN_ADC_OIL_PRESSURE = 36;   // choose free ADC pin
-const float OIL_ADC_REF_VOLTAGE = 2.5f;    // ref voltage of the Firebeetle esp32-e
+const uint8_t PIN_ADC_OIL_PRESSURE = 36;  // choose free ADC pin
+
+// OneWire sensor read delay (ms)
+const uint32_t ONEWIRE_READ_DELAY_MS = 500;
+
+// RPM sensor configuration (flywheel tooth count)
+const float RPM_TEETH = 116.0f;
+
+// RPM signal globals (defined here, used in rpm_sensor.h)
+Frequency* g_frequency = nullptr;
+ValueProducer<float>* g_engine_rev_s_smooth = nullptr;
+ValueProducer<float>* g_engine_rad_s = nullptr;
+
+// ---------------------------------------------------------------------------
+// NOTE:
+// The following oil-pressure constants are from the *resistive sender* design.
+// They are retained for documentation only and are NOT used by the new
+// 0.5–4.5V pressure transducer implementation.
+// ---------------------------------------------------------------------------
+const float OIL_ADC_REF_VOLTAGE = 2.5f;     // ref voltage of the Firebeetle esp32-e
 const float OIL_PULLUP_RESISTOR = 220.0f;   // Resistance (ohm) in mid-range of oil px sender values
 
 // -----------------------------------------------
 // CONSTANTS
 // -----------------------------------------------
 const float ADC_SAMPLE_RATE_HZ = 1.0f;   // sample rate for coolant temp and oil pressure ADC pins (Hz)
-
-
-// NOTE:
-// Coolant temperature calibration is now ADC-volts based.
-// Divider values are retained for documentation / hardware reference only.
-
-
-// Coolant sender voltage divider (hardware verified)
-// Measure the resistor values on your boat to confirm these values!
-// Then confirm ADC readings at various known temperatures to validate calibration.
-// May need to adjust resistor values for better accuracy if necessary, to match ADC readings to
-// gauge signal pin volts
-// R1 = 30.0 kΩ
-// R2 = 8.06 kΩ
-// Gain = (R1 + R2) / R2 ≈ 4.724
-//
-const float DIV_R1 = 30000.0f;     // Top resistor (ohms)
-const float DIV_R2 = 8060.0f;      // Bottom resistor (ohms)
-const float COOLANT_DIVIDER_GAIN = (DIV_R1 + DIV_R2) / DIV_R2;
-
-// COOLANT_DIVIDER_GAIN = 5.0
-
-const float COOLANT_SUPPLY_VOLTAGE = 13.5f;  //13.5 volt nominal, indication will be close enough at 12-14 VDC
-
-// Effective internal resistance of the helm coolant gauge (ohms)
-//
-// NOTE:
-// This is the electrically effective resistance seen by the sender pin,
-// derived empirically from measured sender-pin voltage vs temperature.
-// It is NOT the raw coil resistance of the gauge movement.
-//  OBSOLETE: now calculated from voltage readings
-//const float COOLANT_GAUGE_RESISTOR = 150.0f;
-
-
-const float RPM_TEETH = 116.0f;  // Number of teeth on flywheel gear for RPM sender 3JH3E
-const float RPM_MULTIPLIER = 1.0f / RPM_TEETH; // to get revolutions per second from pulses per second
-
-const uint32_t ONEWIRE_READ_DELAY_MS = 500;  // half a second between reads
-
-Frequency* g_frequency = nullptr;  // Shared RPM signal (rev/s)
-ValueProducer<float>* g_engine_rad_s = nullptr;  // rad/s for Signal K
-ValueProducer<float>* g_engine_rev_s_smooth = nullptr; // rev/s (CANONICAL)
-
 
 // ============================================================================
 // SETUP
@@ -182,7 +132,6 @@ void setup() {
 
   sensesp_app = builder.get_app();
 
-
   // setup engine performance inputs (from NMEA2000--> signalK --> sensesp)
   auto* stw = new SKValueListener<float>(
       "navigation.speedThroughWater",
@@ -208,21 +157,18 @@ void setup() {
       "/config/inputs/awa"
   );
 
-//setup oil pressure sensor
-  new OilPressureSender(
-      PIN_ADC_OIL_PRESSURE,
-      OIL_ADC_REF_VOLTAGE,
-      OIL_PULLUP_RESISTOR,
-      ADC_SAMPLE_RATE_HZ,
-      "propulsion.engine.oilPressure",
-      "/config/sensors/oil_pressure"
-  );
-
-// Call setup functions for sensors
+  // Call setup functions for sensors
   setup_temperature_sensors();
   setup_coolant_sender();
   setup_rpm_sensor();
+
+  // -------------------------------------------------------------------------
+  // Oil pressure sender (0.5–4.5V transducer → ADC → Signal K)
+  // -------------------------------------------------------------------------
+  setup_oil_pressure_sensor(PIN_ADC_OIL_PRESSURE);
+
   setup_engine_hours();
+
   setup_engine_fuel(
       g_engine_rev_s_smooth,  // stable revs
       stw,
@@ -232,9 +178,7 @@ void setup() {
   );
 
   sensesp_app->start();
-
 }
-
 
 // ============================================================================
 // ENGINE HOURS — UI + EDITABLE SK PATH
@@ -243,44 +187,33 @@ void setup() {
 
 void setup_engine_hours() {
 
-  // EngineHours stores the accumulated hours (float, in hours)
   auto* hours = new EngineHours("/config/sensors/engine_hours");
 
-  // Convert hours → seconds for Signal K output
-  // 1 hour = 3600 seconds
   auto* hours_to_seconds = hours->connect_to(
       new Linear(3600.0f, 0.0f, "/config/sensors/engine_hours_to_seconds")
   );
 
-  // Signal K output in SECONDS
   auto* sk_hours = new SKOutputFloat(
       "propulsion.engine.runTime",
       "/config/outputs/sk/engine_hours"
   );
 
-  // Connect RPM signal → hours accumulator
-if (g_engine_rev_s_smooth != nullptr) {
+  if (g_engine_rev_s_smooth != nullptr) {
 
-  auto* revs_to_rpm = g_engine_rev_s_smooth->connect_to(
-      new LambdaTransform<float,float>([](float rps) {
-        return std::isnan(rps) ? NAN : (rps * 60.0f);
-      })
-  );
+    auto* revs_to_rpm = g_engine_rev_s_smooth->connect_to(
+        new LambdaTransform<float,float>([](float rps) {
+          return std::isnan(rps) ? NAN : (rps * 60.0f);
+        })
+    );
 
-  revs_to_rpm->connect_to(hours);
+    revs_to_rpm->connect_to(hours);
 
-} else {
-  Serial.println("Engine hours skipped: RPM signal unavailable");
-}
+  } else {
+    Serial.println("Engine hours skipped: RPM signal unavailable");
+  }
 
+  // hours_to_seconds->connect_to(sk_hours);
 
-  // Output to SK in seconds DISABLED ENGINE HOURS OUTPUT TEMPORARILY
-  
-//  hours_to_seconds->connect_to(sk_hours);
-
-
-
-  // UI configuration remains in HOURS
   ConfigItem(hours)
       ->set_title("Engine Hours Accumulator")
       ->set_description("Tracks total engine run time in hours");
@@ -296,7 +229,6 @@ if (g_engine_rev_s_smooth != nullptr) {
 void loop() {
 
 #ifdef RPM_SIMULATOR
-  // OPTIONAL: print pulse count without blocking
   static uint32_t last_debug = 0;
   if (millis() - last_debug > 200) {
     Serial.printf("Pulses: %u\n", pulse_count);
