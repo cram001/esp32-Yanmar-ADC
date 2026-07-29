@@ -79,12 +79,20 @@ inline void setup_oil_pressure_sensor(uint8_t adc_pin) {
     }
   );
 
+    auto* sk_oil = new SKOutputFloat(
+      "propulsion.0.oilPressure",
+      "/config/outputs/sk/oil_pressure"
+    );
+
+  ConfigItem(sk_oil)
+      ->set_title("Engine Oil Pressure SK Path")
+      ->set_description("Signal K path for engine oil pressure (Pa)")
+      ->set_sort_order(210);
+
   oil_adc
     ->connect_to(adc_to_sensor_v)
     ->connect_to(sensor_v_to_psi)
     ->connect_to(psi_smooth)
     ->connect_to(psi_to_pa)
-    ->connect_to(new SKOutputFloat(
-        "environment.engine.oilPressure"
-    ));
+    ->connect_to(sk_oil);
 }

@@ -72,12 +72,12 @@ inline void setup_temperature_sensors() {
   );
 
   auto* sk_exhaust = new SKOutputFloat(
-      "propulsion.engine.exhaustTemperature",
+      "propulsion.0.exhaustTemperature",
       "/config/outputs/sk/exhaust_temp"
   );
 
   auto* sk_exhaust_i70 = new SKOutputFloat(
-      "propulsion.engine.transmision.oilTemperature",
+      "propulsion.0.transmision.oilTemperature",
       "/config/outputs/sk/transmission_temp"
   );
 

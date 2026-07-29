@@ -137,6 +137,6 @@ inline void setup_engine_load(
       return clamp_val(load, 0.0f, 1.0f);
     })
   )->connect_to(
-    new SKOutputFloat("propulsion.engine.load")
+    new SKOutputFloat("propulsion.0.load")
   );
 }

@@ -344,13 +344,21 @@ inline Transform<float,float>* setup_engine_fuel(
   auto* fuel_lph = fuel_lph_raw->connect_to(new MovingAverage(2));
 
   // Publish to Signal K (m³/s)
-  fuel_lph->connect_to(
-    new LambdaTransform<float,float>([](float lph){
-      return (lph <= 0.0f) ? 0.0f : (lph / 1000.0f) / 3600.0f;
-    })
-  )->connect_to(
-    new SKOutputFloat("propulsion.engine.fuel.rate")
+  auto* conv_to_m3s = new LambdaTransform<float,float>([](float lph){
+    return (lph <= 0.0f) ? 0.0f : (lph / 1000.0f) / 3600.0f;
+  });
+
+  auto* sk_fuel = new SKOutputFloat(
+    "propulsion.0.fuel.rate",
+    "/config/outputs/sk/fuel_flow"
   );
+
+  fuel_lph->connect_to(conv_to_m3s)->connect_to(sk_fuel);
+
+  ConfigItem(sk_fuel)
+    ->set_title("Estimated Fuel Flow SK Path")
+    ->set_description("Signal K path for estimated fuel flow (m^3/s)")
+    ->set_sort_order(220);
 
   // IMPORTANT: return RAW fuel (L/h) for engine_load.h
   return fuel_lph_raw;

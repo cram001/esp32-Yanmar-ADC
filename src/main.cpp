@@ -194,7 +194,7 @@ void setup_engine_hours() {
   );
 
   auto* sk_hours = new SKOutputFloat(
-      "propulsion.engine.runTime",
+      "propulsion.0.runTime",
       "/config/outputs/sk/engine_hours"
   );
 

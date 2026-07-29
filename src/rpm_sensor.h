@@ -166,10 +166,10 @@ inline void setup_rpm_sensor() {
   // ---------------------------------------------------------------------------
   // 5. Signal K output (Hz / rev/s — NOT rad/s)
   // ---------------------------------------------------------------------------
-  auto* sk_revs = new SKOutputFloat(
-      "propulsion.engine.revolutions",
+    auto* sk_revs = new SKOutputFloat(
+      "propulsion.0.revolutions",
       "/config/outputs/sk/revolutions"
-  );
+    );
 
   // Hold last good RPM during short NaN gaps so SK/N2K instruments don't blank
   auto* rpm_latched = g_engine_rev_s_smooth->connect_to(
