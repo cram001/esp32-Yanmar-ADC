@@ -26,12 +26,16 @@
 #include <set>
 
 #include <sensesp/system/valueproducer.h>
-#include <sensesp/system/utils.h>                 // clamp_val
 #include <sensesp/transforms/curveinterpolator.h>
 #include <sensesp/transforms/lambda_transform.h>
 #include <sensesp/signalk/signalk_output.h>
+#include <sensesp/ui/config_item.h>
 
 using namespace sensesp;
+
+static inline float clamp_load(float v, float lo, float hi) {
+  return (v < lo) ? lo : (v > hi) ? hi : v;
+}
 
 // ============================================================================
 // MAX POWER CURVE (kW) — Yanmar 3JH3E EPA
@@ -51,7 +55,6 @@ static std::set<CurveInterpolator::Sample> max_power_curve = {
 // ============================================================================
 static constexpr float BSFC_G_PER_KWH        = 240.0f;
 static constexpr float FUEL_DENSITY_KG_PER_L = 0.84f;
-static constexpr float ENGINE_RUNNING_RPM    = 500.0f;
 
 // ============================================================================
 // Internal latched state (prevents NaN poisoning / async get() races)
@@ -121,6 +124,11 @@ inline void setup_engine_load(
   // --------------------------------------------------------------------------
   // Load fraction (0.0–1.0), NEVER NAN
   // --------------------------------------------------------------------------
+  auto* sk_load = new SKOutputFloat(
+    "propulsion.0.load",
+    "/config/outputs/sk/engine_load"
+  );
+
   actual_power_kW->connect_to(
     new LambdaTransform<float,float>([state](float kW){
       // Engine not running / RPM unknown → load = 0
@@ -134,9 +142,12 @@ inline void setup_engine_load(
       }
 
       const float load = kW / state->max_kW;
-      return clamp_val(load, 0.0f, 1.0f);
+      return clamp_load(load, 0.0f, 1.0f);
     })
-  )->connect_to(
-    new SKOutputFloat("propulsion.0.load")
-  );
+  )->connect_to(sk_load);
+
+  ConfigItem(sk_load)
+    ->set_title("Engine Load SK Path")
+    ->set_description("Signal K path for engine load")
+    ->set_sort_order(230);
 }

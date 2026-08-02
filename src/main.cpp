@@ -43,6 +43,7 @@
 #include "engine_hours.h"
 #include "calibrated_analog_input.h"
 #include "engine_fuel.h"
+#include "engine_load.h"
 #include "onewire_sensors.h"
 #include "coolant_temp.h"
 #include "rpm_sensor.h"
@@ -169,13 +170,15 @@ void setup() {
 
   setup_engine_hours();
 
-  setup_engine_fuel(
+  auto* fuel_lph = setup_engine_fuel(
       g_engine_rev_s_smooth,  // stable revs
       stw,
       sog,
       aws,
       awa
   );
+
+  setup_engine_load(g_engine_rev_s_smooth, fuel_lph);
 
   sensesp_app->start();
 }
@@ -212,7 +215,7 @@ void setup_engine_hours() {
     Serial.println("Engine hours skipped: RPM signal unavailable");
   }
 
-  // hours_to_seconds->connect_to(sk_hours);
+  hours_to_seconds->connect_to(sk_hours);
 
   ConfigItem(hours)
       ->set_title("Engine Hours Accumulator")

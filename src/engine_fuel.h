@@ -90,7 +90,8 @@ static inline float latch_with_hold(
 // ============================================================================
 // CONFIG — USE STW FLAG
 // ============================================================================
-static Linear* use_stw_cfg = nullptr;
+// Temporarily disabled: fuel flow is now based only on RPM.
+// static Linear* use_stw_cfg = nullptr;
 
 // ============================================================================
 // CURVES
@@ -195,14 +196,6 @@ inline Transform<float,float>* setup_engine_fuel(
   };
   static auto* state = new FuelLatchedState();
 
-  // Config UI
-  if (!use_stw_cfg) {
-    use_stw_cfg = new Linear(1.0f, 0.0f, "/config/engine_fuel/use_stw");
-    ConfigItem(use_stw_cfg)
-      ->set_title("Use STW for fuel model")
-      ->set_description(">= 0.5 = use STW, < 0.5 = ignore STW");
-  }
-
   // rev/s → RPM (latched to ride through transient NAN gaps)
   auto* rpm = rpm_rev_s->connect_to(
     new LambdaTransform<float,float>([](float rps){
@@ -280,60 +273,16 @@ inline Transform<float,float>* setup_engine_fuel(
         return 0.0f;
       }
 
-      float stw_kts = stw_kts_vp ? stw_kts_vp->get() : NAN;
-      float sog_kts = sog_kts_vp ? sog_kts_vp->get() : NAN;
-
-      bool use_stw = (use_stw_cfg->get() >= 0.5f);
-      bool stw_valid = !std::isnan(stw_kts);
-      bool sog_valid = !std::isnan(sog_kts);
-
-      bool vessel_docked = false;
-      if (use_stw) {
-        if ((stw_valid && stw_kts <= DOCK_SPEED_KTS) ||
-            (sog_valid && sog_kts <= DOCK_SPEED_KTS)) {
-          vessel_docked = true;
-        }
-      } else {
-        if (sog_valid && sog_kts <= DOCK_SPEED_KTS) {
-          vessel_docked = true;
-        }
-      }
-
-      // Dock / idle
-      if (vessel_docked) {
-        float idle = idle_fuel->get();
-        if (std::isnan(idle) || idle <= 0.0f) idle = 0.6f;
-        return idle;
-      }
-
-      // Underway
+      // Temporarily disabled: speed and wind compensation are not applied.
+      // The fuel estimate now follows the RPM-based baseline curve only.
       float baseFuel = base_fuel->get();
-      float baseSTW  = base_stw->get();
       float fuelMax  = rated_fuel->get();
 
       if (std::isnan(baseFuel) || baseFuel <= 0.0f) {
         return 0.6f;
       }
 
-      float stw_factor = 1.0f;
-      if (use_stw && stw_valid && !stw_invalid(r, stw_kts) &&
-          !std::isnan(baseSTW) && baseSTW > DOCK_SPEED_KTS) {
-
-        float ratio = baseSTW / stw_kts;
-        if (ratio >= 1.05f) {
-          stw_factor = clamp_val(powf(ratio, 0.6f), 1.0f, 2.0f);
-        }
-      }
-
-      float wind_factor = 1.0f;
-      if (aws_kts_vp && awa_rad_vp) {
-        wind_factor = wind_load_factor(
-          aws_kts_vp->get(),
-          awa_rad_vp->get()
-        );
-      }
-
-      float fuel = baseFuel * stw_factor * wind_factor;
+      float fuel = baseFuel;
       if (!std::isnan(fuelMax) && fuel > fuelMax) fuel = fuelMax;
 
       return clamp_val(fuel, 0.0f, 14.0f);
