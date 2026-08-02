@@ -18,6 +18,7 @@
 #ifndef UNIT_TEST
 
 #include <memory>
+#include <WiFi.h>
 
 // SensESP core
 #include "sensesp_app_builder.h"
@@ -132,6 +133,38 @@ void setup() {
       ->set_sk_server("192.168.88.99", 3000);
 
   sensesp_app = builder.get_app();
+
+  if (sensesp_app != nullptr) {
+    auto* ws_client = sensesp_app->get_ws_client().get();
+    if (ws_client != nullptr) {
+      sensesp_app->get_event_loop()->onRepeat(1000, [ws_client]() {
+        static bool ota_in_progress = false;
+        static uint32_t last_ota_check_ms = 0;
+
+        if (millis() - last_ota_check_ms < 500) {
+          return;
+        }
+        last_ota_check_ms = millis();
+
+        if (WiFi.getMode() == WIFI_MODE_NULL) {
+          return;
+        }
+
+        if (ArduinoOTA.getCommand() != U_FLASH && ArduinoOTA.getCommand() != U_SPIFFS) {
+          if (ota_in_progress) {
+            ota_in_progress = false;
+            ws_client->connect();
+          }
+          return;
+        }
+
+        if (!ota_in_progress) {
+          ota_in_progress = true;
+          ws_client->restart();
+        }
+      });
+    }
+  }
 
   // setup engine performance inputs (from NMEA2000--> signalK --> sensesp)
   auto* stw = new SKValueListener<float>(

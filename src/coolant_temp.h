@@ -154,7 +154,7 @@ inline void setup_coolant_sender() {
   // STEP 7 — Signal K output (direct periodic emission)
   // ---------------------------------------------------------------------------
   auto* sk_coolant = new SKOutputFloat(
-      "propulsion.0.temperature",
+      "propulsion.0.coolantTemperature",
       "/config/outputs/sk/coolant_temp"
   );
 
