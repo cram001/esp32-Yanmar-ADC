@@ -138,18 +138,20 @@ void setup() {
   if (sensesp_app != nullptr) {
     auto* ws_client = sensesp_app->get_ws_client().get();
     if (ws_client != nullptr) {
-      ArduinoOTA.onStart([ws_client]() {
-        ESP_LOGI("main.cpp", "OTA starting: suspending Signal K websocket.");
-        ws_client->suspend();
-      });
-      ArduinoOTA.onEnd([ws_client]() {
-        ESP_LOGI("main.cpp", "OTA finished: resuming Signal K websocket.");
-        ws_client->resume();
-      });
-      ArduinoOTA.onError([ws_client](ota_error_t error) {
-        ESP_LOGW("main.cpp", "OTA error %u: resuming Signal K websocket.",
-                 static_cast<unsigned int>(error));
-        ws_client->resume();
+      sensesp_app->get_event_loop()->onDelay(0, [ws_client]() {
+        ArduinoOTA.onStart([ws_client]() {
+          ESP_LOGI("main.cpp", "OTA starting: suspending Signal K websocket.");
+          ws_client->suspend();
+        });
+        ArduinoOTA.onEnd([ws_client]() {
+          ESP_LOGI("main.cpp", "OTA finished: resuming Signal K websocket.");
+          ws_client->resume();
+        });
+        ArduinoOTA.onError([ws_client](ota_error_t error) {
+          ESP_LOGW("main.cpp", "OTA error %u: resuming Signal K websocket.",
+                   static_cast<unsigned int>(error));
+          ws_client->resume();
+        });
       });
     }
   }
