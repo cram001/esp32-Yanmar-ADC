@@ -129,7 +129,7 @@ inline void setup_engine_load(
     "/config/outputs/sk/engine_load"
   );
 
-  actual_power_kW->connect_to(
+  auto* load_calc = actual_power_kW->connect_to(
     new LambdaTransform<float,float>([state](float kW){
       // Engine not running / RPM unknown → load = 0
       if (!std::isfinite(state->rpm) || state->rpm < ENGINE_RUNNING_RPM) {
@@ -144,7 +144,19 @@ inline void setup_engine_load(
       const float load = kW / state->max_kW;
       return clamp_load(load, 0.0f, 1.0f);
     })
-  )->connect_to(sk_load);
+  );
+
+  load_calc->connect_to(sk_load);
+
+  sensesp_app->get_event_loop()->onRepeat(
+      500,
+      [load_calc, sk_load]() {
+        float load = load_calc->get();
+        if (std::isfinite(load)) {
+          sk_load->emit(load);
+        }
+      }
+  );
 
   ConfigItem(sk_load)
     ->set_title("Engine Load SK Path")

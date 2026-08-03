@@ -199,6 +199,17 @@ inline void setup_rpm_sensor() {
   // Signal K expects Hz (rev/s)
   rpm_latched->connect_to(sk_revs);
 
+  sensesp_app->get_event_loop()->onRepeat(
+      500,
+      [rpm_latched, sk_revs]() {
+        float value = rpm_latched->get();
+        if (!std::isfinite(value)) {
+          value = 0.0f;
+        }
+        sk_revs->emit(value);
+      }
+  );
+
   ConfigItem(sk_revs)
       ->set_title("Engine Revolutions (Hz)")
       ->set_description(

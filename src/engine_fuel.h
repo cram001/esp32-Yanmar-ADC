@@ -301,7 +301,18 @@ inline Transform<float,float>* setup_engine_fuel(
     "/config/outputs/sk/fuel_flow"
   );
 
-  fuel_lph->connect_to(conv_to_m3s)->connect_to(sk_fuel);
+  auto* fuel_m3s = fuel_lph->connect_to(conv_to_m3s);
+  fuel_m3s->connect_to(sk_fuel);
+
+  sensesp_app->get_event_loop()->onRepeat(
+      500,
+      [fuel_m3s, sk_fuel]() {
+        float value = fuel_m3s->get();
+        if (std::isfinite(value)) {
+          sk_fuel->emit(value);
+        }
+      }
+  );
 
   ConfigItem(sk_fuel)
     ->set_title("Estimated Fuel Flow SK Path")
