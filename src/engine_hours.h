@@ -15,7 +15,7 @@
  * DESIGN (FIXED)
  * --------------
  *  - RPM/rev-s input provides STATE only (latched last known speed)
- *  - Accumulation is driven by a 1 Hz wall-clock timer (SensESP event loop)
+ *  - Accumulation is driven by a 2 Hz wall-clock timer (SensESP event loop)
  *  - No dependency on RPM update frequency (avoids "steady RPM" starvation)
  *
  * OUTPUT
@@ -136,7 +136,7 @@ class EngineHours : public Transform<float, float> {
   // --------------------------------------------------------------------------
   static constexpr float RPM_RUNNING_THRESHOLD     = 500.0f;
   static constexpr float REV_S_RUNNING_THRESHOLD   = RPM_RUNNING_THRESHOLD / 60.0f; // 8.33333...
-  static constexpr unsigned long TICK_INTERVAL_MS  = 1000;   // 1 Hz
+  static constexpr unsigned long TICK_INTERVAL_MS  = 500;    // 2 Hz
   static constexpr unsigned long SAVE_INTERVAL_MS  = 10000;  // flash protection
 
   // --------------------------------------------------------------------------
