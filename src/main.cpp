@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 
 // SensESP core
 #include "sensesp_app_builder.h"
@@ -137,35 +138,18 @@ void setup() {
   if (sensesp_app != nullptr) {
     auto* ws_client = sensesp_app->get_ws_client().get();
     if (ws_client != nullptr) {
-      sensesp_app->get_event_loop()->onRepeat(1000, [ws_client]() {
-        static bool ota_in_progress = false;
-        static uint32_t last_ota_check_ms = 0;
-
-        if (millis() - last_ota_check_ms < 500) {
-          return;
-        }
-        last_ota_check_ms = millis();
-
-        if (WiFi.getMode() == WIFI_MODE_NULL) {
-          return;
-        }
-
-        const bool ota_active =
-            ArduinoOTA.getCommand() == U_FLASH ||
-            ArduinoOTA.getCommand() == U_SPIFFS;
-
-        if (!ota_active) {
-          if (ota_in_progress) {
-            ota_in_progress = false;
-            ws_client->resume();
-          }
-          return;
-        }
-
-        if (!ota_in_progress) {
-          ota_in_progress = true;
-          ws_client->suspend();
-        }
+      ArduinoOTA.onStart([ws_client]() {
+        ESP_LOGI("main.cpp", "OTA starting: suspending Signal K websocket.");
+        ws_client->suspend();
+      });
+      ArduinoOTA.onEnd([ws_client]() {
+        ESP_LOGI("main.cpp", "OTA finished: resuming Signal K websocket.");
+        ws_client->resume();
+      });
+      ArduinoOTA.onError([ws_client](ota_error_t error) {
+        ESP_LOGW("main.cpp", "OTA error %u: resuming Signal K websocket.",
+                 static_cast<unsigned int>(error));
+        ws_client->resume();
       });
     }
   }
