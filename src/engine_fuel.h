@@ -100,28 +100,27 @@ static inline float latch_with_hold(
 // Baseline STW vs RPM
 static std::set<CurveInterpolator::Sample> baseline_stw_curve = {
   {500,0.0},{1000,1.0},{1800,2.9},{2000,4.5},
-  {2250,5.5},{2500,6.4},{3200,7.2},
+  {2250,5.0},{2500,5.6},{3200,7.2},
   {3600,7.45},{3800,7.45},{3900,7.45}
 };
 
 // Smoothed baseline fuel curve (anchors preserved)
 static std::set<CurveInterpolator::Sample> baseline_fuel_curve = {
   {  500, 0.60 },
-  { 1000, 0.75 },
-  { 1800, 1.10 },
+  { 1000, 0.80 },
+  { 1800, 1.80 },
 
-  { 2000, 1.50 },   // fixed
-  { 2200, 1.85 },
-  { 2400, 2.25 },
-  { 2500, 2.60 },   // fixed
+  { 2000, 2.0 },   // fixed
+  { 2200, 2.30 },
+  { 2400, 2.4 },
+  { 2500, 2.50 },   // fixed
 
-  { 2800, 3.60 },
-  { 3000, 4.40 },
-  { 3200, 5.30 },
-
-  { 3600, 6.90 },   // fixed
-  { 3800, 7.60 },
-  { 3900, 9.60 }
+  { 2800, 2.90 },
+  { 3000, 3.30 },
+  { 3200, 3.80 },
+  { 3600, 4.20 },   // fixed
+  { 3800, 5.00 },
+  { 3900, 6.60 }
 };
 
 // Rated fuel curve (caps only)

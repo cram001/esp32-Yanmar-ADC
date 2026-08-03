@@ -150,17 +150,21 @@ void setup() {
           return;
         }
 
-        if (ArduinoOTA.getCommand() != U_FLASH && ArduinoOTA.getCommand() != U_SPIFFS) {
+        const bool ota_active =
+            ArduinoOTA.getCommand() == U_FLASH ||
+            ArduinoOTA.getCommand() == U_SPIFFS;
+
+        if (!ota_active) {
           if (ota_in_progress) {
             ota_in_progress = false;
-            ws_client->connect();
+            ws_client->resume();
           }
           return;
         }
 
         if (!ota_in_progress) {
           ota_in_progress = true;
-          ws_client->restart();
+          ws_client->suspend();
         }
       });
     }
